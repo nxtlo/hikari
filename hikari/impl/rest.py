@@ -85,6 +85,7 @@ if typing.TYPE_CHECKING:
     import types
 
     from hikari import audit_logs
+    from hikari import commands
     from hikari import invites
     from hikari import messages as messages_
     from hikari import sessions
@@ -94,8 +95,7 @@ if typing.TYPE_CHECKING:
     from hikari.api import cache as cache_api
     from hikari.api import entity_factory as entity_factory_
     from hikari.api import special_endpoints
-    from hikari.interactions import bases as interaction_bases
-    from hikari.interactions import commands
+    from hikari.interactions import base_interactions
 
 _LOGGER: typing.Final[logging.Logger] = logging.getLogger("hikari.rest")
 
@@ -1197,7 +1197,7 @@ class RESTClientImpl(rest_api.RESTClient):
             )
 
         if undefined.all_undefined(embed, embeds) and isinstance(content, embeds_.Embed):
-            # Syntatic sugar, common mistake to accidentally send an embed
+            # Syntactic sugar, common mistake to accidentally send an embed
             # as the content, so lets detect this and fix it for the user.
             embed = content
             content = undefined.UNDEFINED
@@ -1205,7 +1205,7 @@ class RESTClientImpl(rest_api.RESTClient):
         elif undefined.all_undefined(attachment, attachments) and isinstance(
             content, (files.Resource, files.RAWISH_TYPES, os.PathLike)
         ):
-            # Syntatic sugar, common mistake to accidentally send an attachment
+            # Syntactic sugar, common mistake to accidentally send an attachment
             # as the content, so lets detect this and fix it for the user. This
             # will still then work with normal implicit embed attachments as
             # we work this out later.
@@ -1354,14 +1354,14 @@ class RESTClientImpl(rest_api.RESTClient):
             )
 
         if embed is undefined.UNDEFINED and isinstance(content, embeds_.Embed):
-            # Syntatic sugar, common mistake to accidentally send an embed
+            # Syntactic sugar, common mistake to accidentally send an embed
             # as the content, so lets detect this and fix it for the user.
             embed = content
             content = undefined.UNDEFINED
         elif undefined.all_undefined(attachment, attachments) and isinstance(
             content, (files.Resource, files.RAWISH_TYPES, os.PathLike)
         ):
-            # Syntatic sugar, common mistake to accidentally send an attachment
+            # Syntactic sugar, common mistake to accidentally send an attachment
             # as the content, so lets detect this and fix it for the user. This
             # will still then work with normal implicit embed attachments as
             # we work this out later.
@@ -3040,12 +3040,12 @@ class RESTClientImpl(rest_api.RESTClient):
         await self._request(route)
 
     def interaction_deferred_builder(
-        self, type_: typing.Union[interaction_bases.ResponseType, int], /
+        self, type_: typing.Union[base_interactions.ResponseType, int], /
     ) -> special_endpoints.InteractionDeferredBuilder:
         return special_endpoints_impl.InteractionDeferredBuilder(type=type_)
 
     def interaction_message_builder(
-        self, type_: typing.Union[interaction_bases.ResponseType, int], /
+        self, type_: typing.Union[base_interactions.ResponseType, int], /
     ) -> special_endpoints.InteractionMessageBuilder:
         return special_endpoints_impl.InteractionMessageBuilder(type=type_)
 
@@ -3059,9 +3059,9 @@ class RESTClientImpl(rest_api.RESTClient):
 
     async def create_interaction_response(
         self,
-        interaction: snowflakes.SnowflakeishOr[interaction_bases.PartialInteraction],
+        interaction: snowflakes.SnowflakeishOr[base_interactions.PartialInteraction],
         token: str,
-        response_type: typing.Union[int, interaction_bases.ResponseType],
+        response_type: typing.Union[int, base_interactions.ResponseType],
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
         flags: typing.Union[int, messages_.MessageFlag, undefined.UndefinedType] = undefined.UNDEFINED,
@@ -3085,7 +3085,7 @@ class RESTClientImpl(rest_api.RESTClient):
                 "use 'embed' (singular) instead?"
             )
         if undefined.all_undefined(embed, embeds) and isinstance(content, embeds_.Embed):
-            # Syntatic sugar, common mistake to accidentally send an embed
+            # Syntactic sugar, common mistake to accidentally send an embed
             # as the content, so lets detect this and fix it for the user.
             embed = content
             content = undefined.UNDEFINED

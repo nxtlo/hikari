@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# cython: language_level=3
 # Copyright (c) 2020 Nekokatt
 # Copyright (c) 2021 davfsa
 #
@@ -20,21 +19,12 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-"""Interfaces for components that make up Hikari applications.
+from pipelines import config
+from pipelines import nox
 
-These are provided to uncouple specific implementation details from each
-implementation, thus allowing custom solutions to be engineered such as bots
-relying on a distributed event bus or cache.
-"""
 
-from __future__ import annotations
-
-from hikari.api.cache import *
-from hikari.api.entity_factory import *
-from hikari.api.event_factory import *
-from hikari.api.event_manager import *
-from hikari.api.interaction_server import *
-from hikari.api.rest import *
-from hikari.api.shard import *
-from hikari.api.special_endpoints import *
-from hikari.api.voice import *
+@nox.session(reuse_venv=True)
+def codespell(session: nox.Session) -> None:
+    """Run codespell to check for spelling mistakes."""
+    session.install("-r", "dev-requirements.txt")
+    session.run("codespell", config.MAIN_PACKAGE, config.TEST_PACKAGE, config.EXAMPLE_SCRIPTS)

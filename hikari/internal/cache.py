@@ -72,7 +72,7 @@ if typing.TYPE_CHECKING:
     from hikari import channels as channels_
     from hikari import traits
     from hikari import users as users_
-    from hikari.interactions import bases as interaction_bases
+    from hikari.interactions import base_interactions
 
 ChannelT = typing.TypeVar("ChannelT", bound="channels_.GuildChannel")
 DataT = typing.TypeVar("DataT", bound="BaseData[typing.Any]")
@@ -83,80 +83,77 @@ ValueT = typing.TypeVar("ValueT")
 """Type-hint for mapping values."""
 
 
-class CacheMappingView(cache.CacheView[KeyT, ValueT], typing.Generic[KeyT, ValueT]):
+class CacheMappingView(cache.CacheView[KeyT, ValueT]):
     """A cache mapping view implementation used for representing cached data.
 
     Parameters
     ----------
-    items : typing.Mapping[KeyT, typing.Union[ValueT, DataT, RefCell[ValueT]]]
+    items : typing.Union[typing.Mapping[KeyT, ValueT], typing.Mapping[KeyT, DataT]]
         A mapping of keys to the values in their raw forms, wrapped by a ref
         wrapper or in a data form.
     builder : typing.Optional[typing.Callable[[DataT], ValueT]]
         The callable used to build entities before they're returned by the
         mapping. This is used to cover the case when items stores `DataT` objects.
-    predicate : typing.Optional[typing.Callable[[typing.Any], bool]]
-        A callable to use to determine whether entries should be returned or hidden,
-        this should take in whatever raw type was passed for the value in `items`.
-        This may be `builtins.None` if all entries should be exposed.
     """
 
-    __slots__: typing.Sequence[str] = ("_builder", "_data", "_predicate")
+    __slots__: typing.Sequence[str] = ("_data", "_builder")
+
+    @typing.overload
+    def __init__(
+        self,
+        items: typing.Mapping[KeyT, ValueT],
+    ) -> None:
+        ...
+
+    @typing.overload
+    def __init__(
+        self,
+        items: typing.Mapping[KeyT, DataT],
+        *,
+        builder: typing.Callable[[DataT], ValueT],
+    ) -> None:
+        ...
 
     def __init__(
         self,
-        items: typing.Mapping[KeyT, typing.Union[ValueT, DataT]],
+        items: typing.Union[typing.Mapping[KeyT, ValueT], typing.Mapping[KeyT, DataT]],
         *,
         builder: typing.Optional[typing.Callable[[DataT], ValueT]] = None,
-        predicate: typing.Optional[typing.Callable[[typing.Any], bool]] = None,
     ) -> None:
         self._builder = builder
         self._data = items
-        self._predicate = predicate
 
-    @classmethod
-    def _copy(cls, value: ValueT) -> ValueT:
+    @staticmethod
+    def _copy(value: ValueT) -> ValueT:
         return copy.copy(value)
 
     def __contains__(self, key: typing.Any) -> bool:
-        return key in self._data and (self._predicate is None or self._predicate(self._data[key]))
+        return key in self._data
 
     def __getitem__(self, key: KeyT) -> ValueT:
         entry = self._data[key]
 
-        if self._predicate is not None and not self._predicate(entry):
-            raise KeyError(key)
+        if self._builder:
+            return self._builder(entry)  # type: ignore[arg-type]
 
-        if self._builder is not None:
-            entry = self._builder(entry)  # type: ignore[arg-type]
-
-        else:
-            entry = self._copy(entry)  # type: ignore[arg-type]
-
-        return entry
+        return self._copy(entry)  # type: ignore[arg-type]
 
     def __iter__(self) -> typing.Iterator[KeyT]:
-        if self._predicate is None:
-            return iter(self._data)
-        else:
-            return (key for key, value in self._data.items() if self._predicate(value))
+        return iter(self._data)
 
     def __len__(self) -> int:
-        if self._predicate is None:
-            return len(self._data)
-        else:
-            return sum(1 for value in self._data.values() if self._predicate(value))
+        return len(self._data)
 
-    def get_item_at(self, index: int) -> ValueT:
-        current_index = -1
+    @typing.overload
+    def get_item_at(self, index: int, /) -> ValueT:
+        ...
 
-        for key, value in self._data.items():
-            if self._predicate is None or self._predicate(value):
-                index += 1
+    @typing.overload
+    def get_item_at(self, index: slice, /) -> typing.Sequence[ValueT]:
+        ...
 
-            if current_index == index:
-                return self[key]
-
-        raise IndexError(index)
+    def get_item_at(self, index: typing.Union[slice, int], /) -> typing.Union[ValueT, typing.Sequence[ValueT]]:
+        return collections.get_index_or_slice(self, index)
 
     def iterator(self) -> iterators.LazyIterator[ValueT]:
         return iterators.FlatLazyIterator(self.values())
@@ -179,7 +176,7 @@ class EmptyCacheView(cache.CacheView[typing.Any, typing.Any]):
     def __len__(self) -> typing.Literal[0]:
         return 0
 
-    def get_item_at(self, index: int) -> typing.NoReturn:
+    def get_item_at(self, index: typing.Union[slice, int]) -> typing.NoReturn:
         raise IndexError(index)
 
     def iterator(self) -> iterators.LazyIterator[ValueT]:
@@ -197,7 +194,7 @@ class GuildRecord:
     """
 
     is_available: typing.Optional[bool] = attr.field(default=None)
-    """Whether the chached guild is available or not.
+    """Whether the cached guild is available or not.
 
     This will be `builtins.None` when no `GuildRecord.guild` is also
     `builtins.None` else `builtins.bool`.
@@ -601,7 +598,7 @@ class MemberPresenceData(BaseData[presences.MemberPresence]):
 
     @classmethod
     def build_from_entity(cls, presence: presences.MemberPresence, /) -> MemberPresenceData:
-        # role_ids and activities are special cases as may be mutable sequences, therefor we ant to ensure they're
+        # role_ids and activities are special cases as may be mutable sequences, therefore we want to ensure they're
         # stored in immutable sequences (tuples). Plus activities need to be converted to Data objects.
         return cls(
             user_id=presence.user_id,
@@ -706,7 +703,7 @@ class MessageInteractionData(BaseData[messages.MessageInteraction]):
     """A model for storing message interaction data."""
 
     id: snowflakes.Snowflake = attr.field(hash=True, repr=True)
-    type: typing.Union[interaction_bases.InteractionType, int] = attr.field(eq=False, repr=True)
+    type: typing.Union[base_interactions.InteractionType, int] = attr.field(eq=False, repr=True)
     name: str = attr.field(eq=False, repr=True)
     user: RefCell[users_.User] = attr.field(eq=False, repr=True)
 
@@ -740,7 +737,7 @@ def _copy_embed(embed: embeds_.Embed) -> embeds_.Embed:
         author=copy.copy(embed.author) if embed.author else None,
         provider=copy.copy(embed.provider) if embed.provider else None,
         footer=copy.copy(embed.footer) if embed.footer else None,
-        fields=list(map(copy.copy, embed.fields)),  # type: ignore[arg-type]
+        fields=[copy.copy(field) for field in embed.fields],
     )
 
 
@@ -1028,6 +1025,6 @@ class Cache3DMappingView(CacheMappingView[snowflakes.Snowflake, cache.CacheView[
 
     __slots__: typing.Sequence[str] = ()
 
-    @classmethod
-    def _copy(cls, value: cache.CacheView[KeyT, ValueT]) -> cache.CacheView[KeyT, ValueT]:
+    @staticmethod
+    def _copy(value: cache.CacheView[KeyT, ValueT]) -> cache.CacheView[KeyT, ValueT]:
         return value

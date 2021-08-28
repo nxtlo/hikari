@@ -40,14 +40,14 @@ import typing
 import attr
 
 from hikari import channels
+from hikari import commands
 from hikari import errors
 from hikari import files
 from hikari import iterators
 from hikari import snowflakes
 from hikari import undefined
 from hikari.api import special_endpoints
-from hikari.interactions import bases as base_interactions
-from hikari.interactions import commands
+from hikari.interactions import base_interactions
 from hikari.internal import attr_extensions
 from hikari.internal import data_binding
 from hikari.internal import mentions
@@ -682,7 +682,7 @@ class InteractionDeferredBuilder(special_endpoints.InteractionDeferredBuilder):
 
     Parameters
     ----------
-    type : hikari.interactions.bases.DeferredResponseTypesT
+    type : hikari.interactions.base_interactions.DeferredResponseTypesT
         The type of interaction response this is.
     """
 
@@ -724,7 +724,7 @@ class InteractionMessageBuilder(special_endpoints.InteractionMessageBuilder):
 
     Parameters
     ----------
-    type : hikari.interactions.bases.MessageResponseTypesT
+    type : hikari.interactions.base_interactions.MessageResponseTypesT
         The type of interaction response this is.
 
     Other Parameters
@@ -845,7 +845,14 @@ class InteractionMessageBuilder(special_endpoints.InteractionMessageBuilder):
         data = data_binding.JSONObjectBuilder()
         data.put("content", self.content)
         if self._embeds:
-            data["embeds"] = [entity_factory.serialize_embed(embed) for embed in self._embeds]
+            embeds: typing.List[data_binding.JSONObject] = []
+            for embed, attachments in map(entity_factory.serialize_embed, self._embeds):
+                if attachments:
+                    raise ValueError("Cannot send an embed with attachments in a slash command's initial response")
+
+                embeds.append(embed)
+
+            data["embeds"] = embeds
 
         data.put("flags", self.flags)
         data.put("tts", self.is_tts)

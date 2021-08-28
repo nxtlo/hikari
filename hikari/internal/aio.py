@@ -37,6 +37,10 @@ import asyncio
 import inspect
 import typing
 
+if typing.TYPE_CHECKING:
+    # typing_extensions is a dependency of mypy, and pyright vendors it.
+    from typing_extensions import TypeGuard
+
 T_co = typing.TypeVar("T_co", covariant=True)
 T_inv = typing.TypeVar("T_inv")
 
@@ -84,12 +88,12 @@ def completed_future(result: typing.Optional[T_inv] = None, /) -> asyncio.Future
 # ... so I guess I will have to determine this some other way.
 
 
-def is_async_iterator(obj: typing.Any) -> bool:
+def is_async_iterator(obj: typing.Any) -> TypeGuard[typing.AsyncIterator[object]]:
     """Determine if the object is an async iterator or not."""
     return asyncio.iscoroutinefunction(getattr(obj, "__anext__", None))
 
 
-def is_async_iterable(obj: typing.Any) -> bool:
+def is_async_iterable(obj: typing.Any) -> TypeGuard[typing.AsyncIterable[object]]:
     """Determine if the object is an async iterable or not."""
     attr = getattr(obj, "__aiter__", None)
     return inspect.isfunction(attr) or inspect.ismethod(attr)
@@ -201,7 +205,7 @@ def get_or_make_loop() -> asyncio.AbstractEventLoop:
     # get_event_loop will error under oddly specific cases such as if set_event_loop has been called before even
     # if it was just called with None or if it's called on a thread which isn't the main Thread.
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_event_loop_policy().get_event_loop()
 
         # Closed loops cannot be re-used.
         if not loop.is_closed():

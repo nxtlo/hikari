@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import os as _os
 
+from hikari import api
+from hikari import impl
 from hikari._about import __author__
 from hikari._about import __ci__
 from hikari._about import __copyright__
@@ -59,6 +61,7 @@ from hikari.audit_logs import *
 from hikari.channels import *
 from hikari.colors import *
 from hikari.colours import *
+from hikari.commands import *
 from hikari.config import *
 from hikari.embeds import *
 from hikari.emojis import *
@@ -72,11 +75,11 @@ from hikari.files import Pathish
 from hikari.files import Rawish
 from hikari.files import Resourceish
 from hikari.guilds import *
-from hikari.impl.bot import BotApp
-from hikari.impl.bot import GatewayBot
-from hikari.impl.rest import ClientCredentialsStrategy
-from hikari.impl.rest import RESTApp
-from hikari.impl.rest_bot import RESTBot
+from hikari.impl import BotApp
+from hikari.impl import ClientCredentialsStrategy
+from hikari.impl import GatewayBot
+from hikari.impl import RESTApp
+from hikari.impl import RESTBot
 from hikari.intents import *
 from hikari.interactions import *
 from hikari.invites import *
