@@ -70,6 +70,7 @@ from hikari.internal import collections
 if typing.TYPE_CHECKING:
     from hikari import applications
     from hikari import channels as channels_
+    from hikari import stickers as stickers_
     from hikari import traits
     from hikari import users as users_
     from hikari.interactions import base_interactions
@@ -404,6 +405,7 @@ class MemberData(BaseData[guilds.Member]):
     user: RefCell[users_.User] = attr.field()
     guild_id: snowflakes.Snowflake = attr.field()
     nickname: typing.Optional[str] = attr.field()
+    guild_avatar_hash: typing.Optional[str] = attr.field()
     role_ids: typing.Tuple[snowflakes.Snowflake, ...] = attr.field()
     joined_at: datetime.datetime = attr.field()
     premium_since: typing.Optional[datetime.datetime] = attr.field()
@@ -422,6 +424,7 @@ class MemberData(BaseData[guilds.Member]):
             nickname=member.nickname,
             joined_at=member.joined_at,
             premium_since=member.premium_since,
+            guild_avatar_hash=member.guild_avatar_hash,
             is_deaf=member.is_deaf,
             is_mute=member.is_mute,
             is_pending=member.is_pending,
@@ -436,6 +439,7 @@ class MemberData(BaseData[guilds.Member]):
             nickname=self.nickname,
             role_ids=self.role_ids,
             joined_at=self.joined_at,
+            guild_avatar_hash=self.guild_avatar_hash,
             premium_since=self.premium_since,
             is_deaf=self.is_deaf,
             is_mute=self.is_mute,
@@ -765,12 +769,13 @@ class MessageData(BaseData[messages.Message]):
     activity: typing.Optional[messages.MessageActivity] = attr.field()
     application: typing.Optional[messages.MessageApplication] = attr.field()
     message_reference: typing.Optional[messages.MessageReference] = attr.field()
-    flags: typing.Optional[messages.MessageFlag] = attr.field()
-    stickers: typing.Tuple[messages.Sticker, ...] = attr.field()
+    flags: messages.MessageFlag = attr.field()
+    stickers: typing.Tuple[stickers_.PartialSticker, ...] = attr.field()
     nonce: typing.Optional[str] = attr.field()
     referenced_message: typing.Optional[RefCell[MessageData]] = attr.field()
     interaction: typing.Optional[MessageInteractionData] = attr.field()
     application_id: typing.Optional[snowflakes.Snowflake] = attr.field()
+    components: typing.Tuple[messages.PartialComponent, ...] = attr.field()
 
     @classmethod
     def build_from_entity(
@@ -822,6 +827,7 @@ class MessageData(BaseData[messages.Message]):
             referenced_message=referenced_message,
             interaction=interaction,
             application_id=message.application_id,
+            components=tuple(message.components),
         )
 
     def build_entity(self, app: traits.RESTAware, /) -> messages.Message:
@@ -856,6 +862,7 @@ class MessageData(BaseData[messages.Message]):
             referenced_message=referenced_message,
             interaction=self.interaction.build_entity(app) if self.interaction else None,
             application_id=self.application_id,
+            components=self.components,
         )
         message.mentions = self.mentions.build_entity(app, message=message)
         return message
@@ -883,6 +890,9 @@ class MessageData(BaseData[messages.Message]):
 
         if message.embeds is not undefined.UNDEFINED:
             self.embeds = tuple(map(_copy_embed, message.embeds))
+
+        if message.components is not undefined.UNDEFINED:
+            self.components = tuple(message.components)
 
         self.mentions.update(message.mentions, users=mention_users)
 

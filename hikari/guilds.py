@@ -60,6 +60,7 @@ import attr
 
 from hikari import channels as channels_
 from hikari import snowflakes
+from hikari import stickers
 from hikari import traits
 from hikari import undefined
 from hikari import urls
@@ -303,9 +304,6 @@ class GuildWidget:
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitedError
             Usually, Hikari will handle and retry on hitting
             rate-limits automatically. This includes most bucket-specific
@@ -380,6 +378,13 @@ class Member(users.User):
     user: users.User = attr.field(repr=True)
     """This member's corresponding user object."""
 
+    guild_avatar_hash: typing.Optional[str] = attr.field(eq=False, hash=False, repr=False)
+    """Hash of the member's guild avatar guild if set, else `builtins.None`.
+
+    !!! note
+        This takes precedence over `Member.avatar_hash`.
+    """
+
     @property
     def app(self) -> traits.RESTAware:
         """Return the app that is bound to the user object."""
@@ -394,8 +399,29 @@ class Member(users.User):
         return self.user.avatar_url
 
     @property
+    def guild_avatar_url(self) -> typing.Optional[files.URL]:
+        """Guild Avatar URL for the user, if they have one set.
+
+        May be `builtins.None` if no guild avatar is set. In this case, you
+        should use `avatar_hash` or `default_avatar_url` instead.
+        """
+        return self.make_guild_avatar_url()
+
+    @property
     def default_avatar_url(self) -> files.URL:
         return self.user.default_avatar_url
+
+    @property
+    def banner_hash(self) -> typing.Optional[str]:
+        return self.user.banner_hash
+
+    @property
+    def banner_url(self) -> typing.Optional[files.URL]:
+        return self.user.banner_url
+
+    @property
+    def accent_color(self) -> typing.Optional[colors.Color]:
+        return self.user.accent_color
 
     @property
     def discriminator(self) -> str:
@@ -521,6 +547,58 @@ class Member(users.User):
 
     def make_avatar_url(self, *, ext: typing.Optional[str] = None, size: int = 4096) -> typing.Optional[files.URL]:
         return self.user.make_avatar_url(ext=ext, size=size)
+
+    def make_guild_avatar_url(
+        self, *, ext: typing.Optional[str] = None, size: int = 4096
+    ) -> typing.Optional[files.URL]:
+        """Generate the guild specific avatar url for this member, if set.
+
+        If no guild avatar is set, this returns `builtins.None`. You can then
+        use the `make_avatar_url` to get their global custom avatar or
+        `default_avatar_url` if they have no custom avatar set.
+
+        Parameters
+        ----------
+        ext : typing.Optional[builtins.str]
+            The ext to use for this URL, defaults to `png` or `gif`.
+            Supports `png`, `jpeg`, `jpg`, `webp` and `gif` (when
+            animated). Will be ignored for default avatars which can only be
+            `png`.
+
+            If `builtins.None`, then the correct default extension is
+            determined based on whether the icon is animated or not.
+        size : builtins.int
+            The size to set for the URL, defaults to `4096`.
+            Can be any power of two between 16 and 4096.
+            Will be ignored for default avatars.
+
+        Returns
+        -------
+        typing.Optional[hikari.files.URL]
+            The URL to the avatar, or `builtins.None` if not present.
+
+        Raises
+        ------
+        builtins.ValueError
+            If `size` is not a power of two or not between 16 and 4096.
+        """
+        if self.guild_avatar_hash is None:
+            return None
+
+        if ext is None:
+            if self.guild_avatar_hash.startswith("a_"):
+                ext = "gif"
+            else:
+                ext = "png"
+
+        return routes.CDN_MEMBER_AVATAR.compile_to_file(
+            urls.CDN_URL,
+            guild_id=self.guild_id,
+            user_id=self.id,
+            hash=self.guild_avatar_hash,
+            size=size,
+            file_format=ext,
+        )
 
     async def fetch_self(self) -> Member:
         """Fetch an up-to-date view of this member from the API.
@@ -940,6 +1018,12 @@ class Role(PartialRole):
     members will be hoisted under their highest role where this is set to `builtins.True`.
     """
 
+    icon_hash: typing.Optional[str] = attr.field(eq=False, hash=False, repr=False)
+    """Hash of the role's icon if set, else `builtins.None`."""
+
+    unicode_emoji: typing.Optional[emojis_.UnicodeEmoji] = attr.field(eq=False, hash=False, repr=False)
+    """Role's icon as an unicode emoji if set, else `builtins.None`."""
+
     is_managed: bool = attr.field(eq=False, hash=False, repr=False)
     """Whether this role is managed by an integration."""
 
@@ -978,6 +1062,52 @@ class Role(PartialRole):
     def colour(self) -> colours.Colour:
         """Alias for the `color` field."""
         return self.color
+
+    @property
+    def icon_url(self) -> typing.Optional[files.URL]:
+        """Role icon URL, if there is one.
+
+        Returns
+        -------
+        typing.Optional[hikari.files.URL]
+            The URL, or `builtins.None` if no icon exists.
+        """
+        return self.make_icon_url()
+
+    def make_icon_url(self, *, ext: str = "png", size: int = 4096) -> typing.Optional[files.URL]:
+        """Generate the icon URL for this role, if set.
+
+        If no role icon is set, this returns `builtins.None`.
+
+        Parameters
+        ----------
+        ext : builtins.str
+            The extension to use for this URL, defaults to `png`.
+            Supports `png`, `jpeg`, `jpg` and `webp`.
+        size : builtins.int
+            The size to set for the URL, defaults to `4096`.
+            Can be any power of two between 16 and 4096.
+
+        Returns
+        -------
+        typing.Optional[hikari.files.URL]
+            The URL to the icon, or `builtins.None` if not present.
+
+        Raises
+        ------
+        builtins.ValueError
+            If `size` is not a power of two or not between 16 and 4096.
+        """
+        if self.icon_hash is None:
+            return None
+
+        return routes.CDN_ROLE_ICON.compile_to_file(
+            urls.CDN_URL,
+            role_id=self.id,
+            hash=self.icon_hash,
+            size=size,
+            file_format=ext,
+        )
 
 
 @typing.final
@@ -1631,6 +1761,247 @@ class PartialGuild(snowflakes.Unique):
             If an internal error occurs on Discord while handling the request.
         """
         return await self.app.rest.fetch_emoji(self.id, emoji)
+
+    async def fetch_stickers(self) -> typing.Sequence[stickers.GuildSticker]:
+        """Fetch the stickers of the guild.
+
+        Returns
+        -------
+        typing.Sequence[hikari.stickers.GuildSticker]
+            The requested stickers.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are not part of the server.
+        hikari.errors.NotFoundError
+            If the guild is not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+        return await self.app.rest.fetch_guild_stickers(self.id)
+
+    async def fetch_sticker(self, sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker]) -> stickers.GuildSticker:
+        """Fetch a sticker from the guild.
+
+        Parameters
+        ----------
+        sticker : snowflakes.SnowflakeishOr[hikari.stickers.PartialSticker]
+            The sticker to fetch. This can be a sticker object or the
+            ID of an existing sticker.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The requested sticker.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are not part of the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+        return await self.app.rest.fetch_guild_sticker(self.id, sticker)
+
+    async def create_sticker(
+        self,
+        name: str,
+        tag: str,
+        image: files.Resourceish,
+        *,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        """Create a sticker in a guild.
+
+        Parameters
+        ----------
+        name : builtins.str
+            The name for the sticker.
+        tag : builtins.str
+            The tag for the sticker.
+        image : hikari.files.Resourceish
+            The 320x320 image for the sticker. Maximum upload size is 500kb.
+            This can be a still or an animated PNG or a Lottie.
+
+            !!! note
+                Lottie support is only available for verified and partnered
+                servers.
+
+        Other Parameters
+        ----------------
+        description: hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the description of the sticker.
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The created sticker.
+
+        Raises
+        ------
+        hikari.errors.BadRequestError
+            If any of the fields that are passed have an invalid value or
+            if there are no more spaces for the sticker in the guild.
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild is not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+        return await self.app.rest.create_sticker(self.id, name, tag, image, description=description, reason=reason)
+
+    async def edit_sticker(
+        self,
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        name: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        tag: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        """Edit a sticker in a guild.
+
+        Parameters
+        ----------
+        sticker : hikari.snowflakes.SnowflakeishOr[hikari.stickers.PartialSticker]
+            The sticker to edit. This can be a sticker object or the ID of an
+            existing sticker.
+
+        Other Parameters
+        ----------------
+        name : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new name for the sticker.
+        description : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new description for the sticker.
+        tag : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new sticker tag.
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The edited sticker.
+
+        Raises
+        ------
+        hikari.errors.BadRequestError
+            If any of the fields that are passed have an invalid value.
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+        return await self.app.rest.edit_sticker(
+            self.id, sticker, name=name, description=description, tag=tag, reason=reason
+        )
+
+    async def delete_sticker(
+        self,
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> None:
+        """Delete a sticker in a guild.
+
+        Parameters
+        ----------
+        sticker : hikari.snowflakes.SnowflakeishOr[hikari.stickers.PartialSticker]
+            The sticker to delete. This can be a sticker object or the ID
+            of an existing sticker.
+
+        Other Parameters
+        ----------------
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+        return await self.app.rest.delete_sticker(self.id, sticker, reason=reason)
 
     async def create_category(
         self,
@@ -2692,7 +3063,7 @@ class Guild(PartialGuild):
     def get_emoji(
         self, emoji: snowflakes.SnowflakeishOr[emojis_.CustomEmoji]
     ) -> typing.Optional[emojis_.KnownCustomEmoji]:
-        """Get a cached role that belongs to the guild by it's ID or object.
+        """Get a cached emoji that belongs to the guild by it's ID or object.
 
         Parameters
         ----------
@@ -2779,9 +3150,6 @@ class Guild(PartialGuild):
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitedError
             Usually, Hikari will handle and retry on hitting
             rate-limits automatically. This includes most bucket-specific
@@ -2816,9 +3184,6 @@ class Guild(PartialGuild):
             If you are missing the `READ_MESSAGES` permission in the channel.
         hikari.errors.NotFoundError
             If the channel is not found.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
@@ -2857,9 +3222,6 @@ class Guild(PartialGuild):
             If you are missing the `READ_MESSAGES` permission in the channel.
         hikari.errors.NotFoundError
             If the channel is not found.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
@@ -2902,9 +3264,6 @@ class Guild(PartialGuild):
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitedError
             Usually, Hikari will handle and retry on hitting
             rate-limits automatically. This includes most bucket-specific
@@ -2942,9 +3301,6 @@ class Guild(PartialGuild):
             If you are missing the `READ_MESSAGES` permission in the channel.
         hikari.errors.NotFoundError
             If the channel is not found.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.

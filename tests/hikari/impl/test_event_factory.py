@@ -61,33 +61,25 @@ class TestEventFactoryImpl:
     # CHANNEL EVENTS #
     ##################
 
-    def test_deserialize_channel_create_event_for_guild_channel(self, event_factory, mock_app, mock_shard):
+    def test_deserialize_guild_channel_create_event(self, event_factory, mock_app, mock_shard):
         mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.GuildChannel)
         mock_payload = mock.Mock(app=mock_app)
 
-        event = event_factory.deserialize_channel_create_event(mock_shard, mock_payload)
+        event = event_factory.deserialize_guild_channel_create_event(mock_shard, mock_payload)
 
         mock_app.entity_factory.deserialize_channel.assert_called_once_with(mock_payload)
         assert isinstance(event, channel_events.GuildChannelCreateEvent)
         assert event.shard is mock_shard
         assert event.channel is mock_app.entity_factory.deserialize_channel.return_value
 
-    def test_deserialize_channel_create_event_for_dm_channel(self, event_factory, mock_app, mock_shard):
-        mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.DMChannel)
-
-        with pytest.raises(NotImplementedError):
-            event_factory.deserialize_channel_create_event(mock_shard, {"id": "42"})
-
-    def test_deserialize_channel_create_event_for_unexpected_channel_type(self, event_factory, mock_app, mock_shard):
-        with pytest.raises(TypeError, match="Expected GuildChannel or PrivateChannel but received Mock"):
-            event_factory.deserialize_channel_create_event(mock_shard, {"id": "42"})
-
-    def test_deserialize_channel_update_event_with_guild_channel(self, event_factory, mock_app, mock_shard):
+    def test_deserialize_guild_channel_update_event(self, event_factory, mock_app, mock_shard):
         mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.GuildChannel)
         mock_old_channel = object()
         mock_payload = object()
 
-        event = event_factory.deserialize_channel_update_event(mock_shard, mock_payload, old_channel=mock_old_channel)
+        event = event_factory.deserialize_guild_channel_update_event(
+            mock_shard, mock_payload, old_channel=mock_old_channel
+        )
 
         mock_app.entity_factory.deserialize_channel.assert_called_once_with(mock_payload)
         assert isinstance(event, channel_events.GuildChannelUpdateEvent)
@@ -95,39 +87,16 @@ class TestEventFactoryImpl:
         assert event.channel is mock_app.entity_factory.deserialize_channel.return_value
         assert event.old_channel is mock_old_channel
 
-    def test_deserialize_channel_update_event_with_dm_channel(self, event_factory, mock_app, mock_shard):
-        mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.DMChannel)
-
-        with pytest.raises(NotImplementedError):
-            event_factory.deserialize_channel_update_event(mock_shard, {"id": "42"}, old_channel=None)
-
-    def test_deserialize_channel_update_event_with_unexpected_channel_type(self, event_factory, mock_app, mock_shard):
-        with pytest.raises(TypeError, match="Expected GuildChannel or PrivateChannel but received Mock"):
-            event_factory.deserialize_channel_update_event(mock_shard, {"id": "42"}, old_channel=None)
-
-    def test_deserialize_channel_delete_event_with_guild_channel(self, event_factory, mock_app, mock_shard):
+    def test_deserialize_guild_channel_delete_event(self, event_factory, mock_app, mock_shard):
         mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.GuildChannel)
         mock_payload = mock.Mock(app=mock_app)
 
-        event = event_factory.deserialize_channel_delete_event(mock_shard, mock_payload)
+        event = event_factory.deserialize_guild_channel_delete_event(mock_shard, mock_payload)
 
         mock_app.entity_factory.deserialize_channel.assert_called_once_with(mock_payload)
         assert isinstance(event, channel_events.GuildChannelDeleteEvent)
         assert event.shard is mock_shard
         assert event.channel is mock_app.entity_factory.deserialize_channel.return_value
-
-    def test_deserialize_channel_delete_event_with_dm_channel(self, event_factory, mock_app, mock_shard):
-        mock_app.entity_factory.deserialize_channel.return_value = mock.Mock(spec=channel_models.DMChannel)
-        mock_payload = object()
-
-        with pytest.raises(NotImplementedError):
-            event_factory.deserialize_channel_delete_event(mock_shard, mock_payload)
-
-    def test_deserialize_channel_delete_event_with_unexpected_channel_type(self, event_factory, mock_app, mock_shard):
-        mock_payload = object()
-
-        with pytest.raises(TypeError, match="Expected GuildChannel or PrivateChannel but received Mock"):
-            event_factory.deserialize_channel_delete_event(mock_shard, mock_payload)
 
     def test_deserialize_channel_pins_update_event_for_guild(self, event_factory, mock_app, mock_shard):
         mock_payload = {"channel_id": "123435", "last_pin_timestamp": None, "guild_id": "43123123"}
@@ -236,13 +205,29 @@ class TestEventFactoryImpl:
     # GUILD EVENTS #
     ################
 
-    def test_deserialize_guild_create_event(self, event_factory, mock_app, mock_shard):
+    def test_deserialize_guild_available_event(self, event_factory, mock_app, mock_shard):
         mock_payload = mock.Mock(app=mock_app)
 
-        event = event_factory.deserialize_guild_create_event(mock_shard, mock_payload)
+        event = event_factory.deserialize_guild_available_event(mock_shard, mock_payload)
 
         mock_app.entity_factory.deserialize_gateway_guild.assert_called_once_with(mock_payload)
         assert isinstance(event, guild_events.GuildAvailableEvent)
+        assert event.shard is mock_shard
+        assert event.guild is mock_app.entity_factory.deserialize_gateway_guild.return_value.guild
+        assert event.emojis is mock_app.entity_factory.deserialize_gateway_guild.return_value.emojis
+        assert event.roles is mock_app.entity_factory.deserialize_gateway_guild.return_value.roles
+        assert event.channels is mock_app.entity_factory.deserialize_gateway_guild.return_value.channels
+        assert event.members is mock_app.entity_factory.deserialize_gateway_guild.return_value.members
+        assert event.presences is mock_app.entity_factory.deserialize_gateway_guild.return_value.presences
+        assert event.voice_states is mock_app.entity_factory.deserialize_gateway_guild.return_value.voice_states
+
+    def test_deserialize_guild_join_event(self, event_factory, mock_app, mock_shard):
+        mock_payload = mock.Mock(app=mock_app)
+
+        event = event_factory.deserialize_guild_join_event(mock_shard, mock_payload)
+
+        mock_app.entity_factory.deserialize_gateway_guild.assert_called_once_with(mock_payload)
+        assert isinstance(event, guild_events.GuildJoinEvent)
         assert event.shard is mock_shard
         assert event.guild is mock_app.entity_factory.deserialize_gateway_guild.return_value.guild
         assert event.emojis is mock_app.entity_factory.deserialize_gateway_guild.return_value.emojis
@@ -268,13 +253,15 @@ class TestEventFactoryImpl:
 
     def test_deserialize_guild_leave_event(self, event_factory, mock_app, mock_shard):
         mock_payload = {"id": "43123123"}
+        mock_old_guild = object()
 
-        event = event_factory.deserialize_guild_leave_event(mock_shard, mock_payload)
+        event = event_factory.deserialize_guild_leave_event(mock_shard, mock_payload, old_guild=mock_old_guild)
 
         assert isinstance(event, guild_events.GuildLeaveEvent)
         assert event.app is mock_app
         assert event.shard is mock_shard
         assert event.guild_id == 43123123
+        assert event.old_guild is mock_old_guild
 
     def test_deserialize_guild_unavailable_event(self, event_factory, mock_app, mock_shard):
         mock_payload = {"id": "6541233"}
@@ -392,6 +379,8 @@ class TestEventFactoryImpl:
                 "id": "1231312",
                 "username": "OK",
                 "avatar": "NOK",
+                "banner": "12122hssjamanmdd",
+                "accent_color": 12342,
                 "bot": True,
                 "system": False,
                 "public_flags": 42,
@@ -414,6 +403,8 @@ class TestEventFactoryImpl:
         assert event.user.username == "OK"
         assert event.user.discriminator == "1231"
         assert event.user.avatar_hash == "NOK"
+        assert event.user.banner_hash == "12122hssjamanmdd"
+        assert event.user.accent_color == 12342
         assert event.user.is_bot is True
         assert event.user.is_system is False
         assert event.user.flags == 42
@@ -439,6 +430,8 @@ class TestEventFactoryImpl:
         assert event.user.username is undefined.UNDEFINED
         assert event.user.discriminator is undefined.UNDEFINED
         assert event.user.avatar_hash is undefined.UNDEFINED
+        assert event.user.banner_hash is undefined.UNDEFINED
+        assert event.user.accent_color is undefined.UNDEFINED
         assert event.user.is_bot is undefined.UNDEFINED
         assert event.user.is_system is undefined.UNDEFINED
         assert event.user.flags is undefined.UNDEFINED
@@ -448,36 +441,6 @@ class TestEventFactoryImpl:
     ######################
     # INTERACTION EVENTS #
     ######################
-
-    def test_deserialize_command_create_event(self, event_factory, mock_app, mock_shard):
-        payload = {"id": "123"}
-
-        result = event_factory.deserialize_command_create_event(mock_shard, payload)
-
-        mock_app.entity_factory.deserialize_command.assert_called_once_with(payload)
-        assert result.shard is mock_shard
-        assert result.command is mock_app.entity_factory.deserialize_command.return_value
-        assert isinstance(result, interaction_events.CommandCreateEvent)
-
-    def test_deserialize_command_update_event(self, event_factory, mock_app, mock_shard):
-        payload = {"id": "12344"}
-
-        result = event_factory.deserialize_command_update_event(mock_shard, payload)
-
-        mock_app.entity_factory.deserialize_command.assert_called_once_with(payload)
-        assert result.shard is mock_shard
-        assert result.command is mock_app.entity_factory.deserialize_command.return_value
-        assert isinstance(result, interaction_events.CommandUpdateEvent)
-
-    def test_deserialize_command_delete_event(self, event_factory, mock_app, mock_shard):
-        payload = {"id": "1561232344"}
-
-        result = event_factory.deserialize_command_delete_event(mock_shard, payload)
-
-        mock_app.entity_factory.deserialize_command.assert_called_once_with(payload)
-        assert result.shard is mock_shard
-        assert result.command is mock_app.entity_factory.deserialize_command.return_value
-        assert isinstance(result, interaction_events.CommandDeleteEvent)
 
     def test_deserialize_interaction_create_event(self, event_factory, mock_app, mock_shard):
         payload = {"id": "1561232344"}

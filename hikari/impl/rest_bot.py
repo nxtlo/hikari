@@ -50,9 +50,13 @@ if typing.TYPE_CHECKING:
     from hikari.api import rest as rest_api
     from hikari.api import special_endpoints
     from hikari.interactions import base_interactions
+    from hikari.interactions import command_interactions
+    from hikari.interactions import component_interactions
 
-    _InteractionT = typing.TypeVar("_InteractionT", bound=base_interactions.PartialInteraction)
-
+    _InteractionT_co = typing.TypeVar("_InteractionT_co", bound=base_interactions.PartialInteraction, covariant=True)
+    _MessageResponseBuilderT = typing.Union[
+        special_endpoints.InteractionDeferredBuilder, special_endpoints.InteractionMessageBuilder
+    ]
 
 _LOGGER: typing.Final[logging.Logger] = logging.getLogger("hikari.rest_bot")
 
@@ -127,7 +131,8 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
 
         If a `typing.Dict[str, typing.Any]` equivalent, then this value is
         passed to `logging.config.dictConfig` to allow the user to provide a
-        specialized logging configuration of their choice.
+        specialized logging configuration of their choice. If any handlers are
+        defined in the dict, default handlers will not be setup.
 
         As a side note, you can always opt to leave this on the default value
         and then use an incremental `logging.config.dictConfig` that applies
@@ -149,6 +154,9 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
         Note that this only applies to the REST API component that communicates
         with Discord, and will not affect sharding or third party HTTP endpoints
         that may be in use.
+    max_retries : typing.Optional[builtins.int]
+        Maximum number of times a request will be retried if
+        it fails with a `5xx` status. Defaults to 3 if set to `builtins.None`.
     proxy_settings : typing.Optional[config.ProxySettings]
         Custom proxy settings to use with network-layer logic
         in your application to get through an HTTP-proxy.
@@ -197,6 +205,7 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
         http_settings: typing.Optional[config.HTTPSettings] = None,
         logs: typing.Union[None, int, str, typing.Dict[str, typing.Any]] = "INFO",
         max_rate_limit: float = 300.0,
+        max_retries: int = 3,
         proxy_settings: typing.Optional[config.ProxySettings] = None,
         rest_url: typing.Optional[str] = None,
     ) -> None:
@@ -216,6 +225,7 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
         http_settings: typing.Optional[config.HTTPSettings] = None,
         logs: typing.Union[None, int, str, typing.Dict[str, typing.Any]] = "INFO",
         max_rate_limit: float = 300.0,
+        max_retries: int = 3,
         proxy_settings: typing.Optional[config.ProxySettings] = None,
         rest_url: typing.Optional[str] = None,
     ) -> None:
@@ -234,6 +244,7 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
         http_settings: typing.Optional[config.HTTPSettings] = None,
         logs: typing.Union[None, int, str, typing.Dict[str, typing.Any]] = "INFO",
         max_rate_limit: float = 300.0,
+        max_retries: int = 3,
         proxy_settings: typing.Optional[config.ProxySettings] = None,
         rest_url: typing.Optional[str] = None,
     ) -> None:
@@ -261,6 +272,7 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
             executor=self._executor,
             http_settings=self._http_settings,
             max_rate_limit=max_rate_limit,
+            max_retries=max_retries,
             proxy_settings=self._proxy_settings,
             rest_url=rest_url,
             token=token,
@@ -559,19 +571,61 @@ class RESTBot(traits.RESTBotAware, interaction_server_.InteractionServer):
             ssl_context=ssl_context,
         )
 
+    @typing.overload
     def get_listener(
-        self, interaction_type: typing.Type[_InteractionT], /
-    ) -> typing.Optional[interaction_server_.ListenerT[_InteractionT, special_endpoints.InteractionResponseBuilder]]:
-        return self._server.get_listener(interaction_type)
+        self, interaction_type: typing.Type[command_interactions.CommandInteraction], /
+    ) -> typing.Optional[
+        interaction_server_.ListenerT[command_interactions.CommandInteraction, _MessageResponseBuilderT]
+    ]:
+        ...
 
+    @typing.overload
+    def get_listener(
+        self, interaction_type: typing.Type[component_interactions.ComponentInteraction], /
+    ) -> typing.Optional[
+        interaction_server_.ListenerT[component_interactions.ComponentInteraction, _MessageResponseBuilderT]
+    ]:
+        ...
+
+    def get_listener(
+        self, interaction_type: typing.Type[_InteractionT_co], /
+    ) -> typing.Optional[interaction_server_.ListenerT[_InteractionT_co, special_endpoints.InteractionResponseBuilder]]:
+        return self._server.get_listener(interaction_type)  # type: ignore[return-value, arg-type]
+
+    @typing.overload
     def set_listener(
         self,
-        interaction_type: typing.Type[_InteractionT],
+        interaction_type: typing.Type[command_interactions.CommandInteraction],
         listener: typing.Optional[
-            interaction_server_.ListenerT[_InteractionT, special_endpoints.InteractionResponseBuilder]
+            interaction_server_.ListenerT[command_interactions.CommandInteraction, _MessageResponseBuilderT]
         ],
         /,
         *,
         replace: bool = False,
     ) -> None:
-        self._server.set_listener(interaction_type, listener, replace=replace)
+        ...
+
+    @typing.overload
+    def set_listener(
+        self,
+        interaction_type: typing.Type[component_interactions.ComponentInteraction],
+        listener: typing.Optional[
+            interaction_server_.ListenerT[component_interactions.ComponentInteraction, _MessageResponseBuilderT]
+        ],
+        /,
+        *,
+        replace: bool = False,
+    ) -> None:
+        ...
+
+    def set_listener(
+        self,
+        interaction_type: typing.Type[_InteractionT_co],
+        listener: typing.Optional[
+            interaction_server_.ListenerT[_InteractionT_co, special_endpoints.InteractionResponseBuilder]
+        ],
+        /,
+        *,
+        replace: bool = False,
+    ) -> None:
+        self._server.set_listener(interaction_type, listener, replace=replace)  # type: ignore[arg-type]

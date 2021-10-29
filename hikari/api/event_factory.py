@@ -64,9 +64,9 @@ class EventFactory(abc.ABC):
     ##################
 
     @abc.abstractmethod
-    def deserialize_channel_create_event(
+    def deserialize_guild_channel_create_event(
         self, shard: gateway_shard.GatewayShard, payload: data_binding.JSONObject
-    ) -> channel_events.ChannelCreateEvent:
+    ) -> channel_events.GuildChannelCreateEvent:
         """Parse a raw payload from Discord into a channel create event object.
 
         Parameters
@@ -78,18 +78,18 @@ class EventFactory(abc.ABC):
 
         Returns
         -------
-        hikari.events.channel_events.ChannelCreateEvent
+        hikari.events.channel_events.GuildChannelCreateEvent
             The parsed channel create event object.
         """
 
     @abc.abstractmethod
-    def deserialize_channel_update_event(
+    def deserialize_guild_channel_update_event(
         self,
         shard: gateway_shard.GatewayShard,
         payload: data_binding.JSONObject,
         *,
         old_channel: typing.Optional[channel_models.GuildChannel],
-    ) -> channel_events.ChannelUpdateEvent:
+    ) -> channel_events.GuildChannelUpdateEvent:
         """Parse a raw payload from Discord into a channel update event object.
 
         Parameters
@@ -103,14 +103,14 @@ class EventFactory(abc.ABC):
 
         Returns
         -------
-        hikari.events.channel_events.ChannelUpdateEvent
+        hikari.events.channel_events.GuildChannelUpdateEvent
             The parsed  event object.
         """
 
     @abc.abstractmethod
-    def deserialize_channel_delete_event(
+    def deserialize_guild_channel_delete_event(
         self, shard: gateway_shard.GatewayShard, payload: data_binding.JSONObject
-    ) -> channel_events.ChannelDeleteEvent:
+    ) -> channel_events.GuildChannelDeleteEvent:
         """Parse a raw payload from Discord into a channel delete event object.
 
         Parameters
@@ -122,7 +122,7 @@ class EventFactory(abc.ABC):
 
         Returns
         -------
-        hikari.events.channel_events.ChannelDeleteEvent
+        hikari.events.channel_events.GuildChannelDeleteEvent
             The parsed channel delete event object.
         """
 
@@ -236,10 +236,10 @@ class EventFactory(abc.ABC):
     ################
 
     @abc.abstractmethod
-    def deserialize_guild_create_event(
+    def deserialize_guild_available_event(
         self, shard: gateway_shard.GatewayShard, payload: data_binding.JSONObject
     ) -> guild_events.GuildAvailableEvent:
-        """Parse a raw payload from Discord into a guild create event object.
+        """Parse a raw payload from Discord into a guild available event object.
 
         Parameters
         ----------
@@ -255,12 +255,31 @@ class EventFactory(abc.ABC):
         """
 
     @abc.abstractmethod
+    def deserialize_guild_join_event(
+        self, shard: gateway_shard.GatewayShard, payload: data_binding.JSONObject
+    ) -> guild_events.GuildJoinEvent:
+        """Parse a raw payload from Discord into a guild join event object.
+
+        Parameters
+        ----------
+        shard : hikari.api.shard.GatewayShard
+            The shard that emitted this event.
+        payload : hikari.internal.data_binding.JSONObject
+            The dict payload to parse.
+
+        Returns
+        -------
+        hikari.events.guild_events.GuildJoinEvent
+            The parsed guild join event object.
+        """
+
+    @abc.abstractmethod
     def deserialize_guild_update_event(
         self,
         shard: gateway_shard.GatewayShard,
         payload: data_binding.JSONObject,
         *,
-        old_guild: typing.Optional[guild_models.Guild],
+        old_guild: typing.Optional[guild_models.GatewayGuild],
     ) -> guild_events.GuildUpdateEvent:
         """Parse a raw payload from Discord into a guild update event object.
 
@@ -270,7 +289,7 @@ class EventFactory(abc.ABC):
             The shard that emitted this event.
         payload : hikari.internal.data_binding.JSONObject
             The dict payload to parse.
-        old_guild : typing.Optional[hikari.guilds.Guild]
+        old_guild : typing.Optional[hikari.guilds.GatewayGuild]
             The guild object or `builtins.None`.
 
         Returns
@@ -281,7 +300,11 @@ class EventFactory(abc.ABC):
 
     @abc.abstractmethod
     def deserialize_guild_leave_event(
-        self, shard: gateway_shard.GatewayShard, payload: data_binding.JSONObject
+        self,
+        shard: gateway_shard.GatewayShard,
+        payload: data_binding.JSONObject,
+        *,
+        old_guild: typing.Optional[guild_models.GatewayGuild],
     ) -> guild_events.GuildLeaveEvent:
         """Parse a raw payload from Discord into a guild leave event object.
 
@@ -291,6 +314,8 @@ class EventFactory(abc.ABC):
             The shard that emitted this event.
         payload : hikari.internal.data_binding.JSONObject
             The dict payload to parse.
+        old_guild : typing.Optional[hikari.guilds.GatewayGuild]
+            The guild object or `builtins.None`.
 
         Returns
         -------
@@ -465,69 +490,6 @@ class EventFactory(abc.ABC):
     ######################
     # INTERACTION EVENTS #
     ######################
-
-    @abc.abstractmethod
-    def deserialize_command_create_event(
-        self,
-        shard: gateway_shard.GatewayShard,
-        payload: data_binding.JSONObject,
-    ) -> interaction_events.CommandCreateEvent:
-        """Parse a raw payload from Discord into a command create event object.
-
-        Parameters
-        ----------
-        shard : hikari.api.shard.GatewayShard
-            The shard that emitted this event.
-        payload : hikari.internal.data_binding.JSONObject
-            The dict payload to parse.
-
-        Returns
-        -------
-        hikari.events.interaction_events.CommandCreateEvent
-            The parsed command create event object.
-        """
-
-    @abc.abstractmethod
-    def deserialize_command_update_event(
-        self,
-        shard: gateway_shard.GatewayShard,
-        payload: data_binding.JSONObject,
-    ) -> interaction_events.CommandUpdateEvent:
-        """Parse a raw payload from Discord into a command update event object.
-
-        Parameters
-        ----------
-        shard : hikari.api.shard.GatewayShard
-            The shard that emitted this event.
-        payload : hikari.internal.data_binding.JSONObject
-            The dict payload to parse.
-
-        Returns
-        -------
-        hikari.events.interaction_events.CommandUpdateEvent
-            The parsed command update event object.
-        """
-
-    @abc.abstractmethod
-    def deserialize_command_delete_event(
-        self,
-        shard: gateway_shard.GatewayShard,
-        payload: data_binding.JSONObject,
-    ) -> interaction_events.CommandDeleteEvent:
-        """Parse a raw payload from Discord into a command delete event object.
-
-        Parameters
-        ----------
-        shard : hikari.api.shard.GatewayShard
-            The shard that emitted this event.
-        payload : hikari.internal.data_binding.JSONObject
-            The dict payload to parse.
-
-        Returns
-        -------
-        hikari.events.interaction_events.CommandDeleteEvent
-            The parsed command delete event object.
-        """
 
     @abc.abstractmethod
     def deserialize_interaction_create_event(

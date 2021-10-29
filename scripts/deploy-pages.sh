@@ -24,9 +24,7 @@ nox --sessions pages
 cd public || exit 1
 
 git init
-git config user.name "davfsa"
-git config user.email "29100934+davfsa@users.noreply.github.com"
-git remote add origin https://davfsa:${GITHUB_TOKEN}@github.com/${GITHUB_REPO_SLUG}
+git remote add origin "https://git:${GITHUB_TOKEN}@github.com/${GITHUB_REPO_SLUG}"
 
 git checkout -B gh-pages
 git add -Av .

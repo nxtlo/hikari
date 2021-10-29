@@ -75,7 +75,6 @@ from hikari.files import Pathish
 from hikari.files import Rawish
 from hikari.files import Resourceish
 from hikari.guilds import *
-from hikari.impl import BotApp
 from hikari.impl import ClientCredentialsStrategy
 from hikari.impl import GatewayBot
 from hikari.impl import RESTApp
@@ -95,6 +94,7 @@ from hikari.snowflakes import Snowflakeish
 from hikari.snowflakes import SnowflakeishOr
 from hikari.snowflakes import SnowflakeishSequence
 from hikari.snowflakes import Unique
+from hikari.stickers import *
 from hikari.templates import *
 from hikari.traits import *
 from hikari.undefined import UNDEFINED

@@ -21,6 +21,7 @@
 # SOFTWARE.
 import typing
 
+import aiohttp
 import attr
 import mock
 import multidict
@@ -34,6 +35,52 @@ from hikari.internal import data_binding
 @attr.define()
 class MyUnique(snowflakes.Unique):
     id: snowflakes.Snowflake = attr.field(converter=snowflakes.Snowflake)
+
+
+class TestURLEncodedFormBuilder:
+    @pytest.fixture()
+    def form_builder(self):
+        return data_binding.URLEncodedFormBuilder()
+
+    def test_add_field(self, form_builder):
+        form_builder.add_field("test_name", "test_data", content_type="mimetype")
+
+        assert form_builder._fields == [("test_name", "test_data", "mimetype")]
+
+    def test_add_resource(self, form_builder):
+        mock_resource = object()
+
+        form_builder.add_resource("lick", mock_resource)
+
+        assert form_builder._resources == [("lick", mock_resource)]
+
+    @pytest.mark.asyncio()
+    async def test_build(self, form_builder):
+        resource1 = mock.Mock()
+        resource2 = mock.Mock()
+        stream1 = mock.Mock(filename="testing1", mimetype="text")
+        stream2 = mock.Mock(filename="testing2", mimetype=None)
+        mock_stack = mock.AsyncMock(enter_async_context=mock.AsyncMock(side_effect=[stream1, stream2]))
+        form_builder._executor = object()
+        form_builder._fields = [("test_name", "test_data", "mimetype"), ("test_name2", "test_data2", "mimetype2")]
+        form_builder._resources = [("aye", resource1), ("lmao", resource2)]
+
+        with mock.patch.object(aiohttp, "FormData") as mock_form_class:
+            assert await form_builder.build(mock_stack) is mock_form_class.return_value
+
+        resource1.stream.assert_called_once_with(executor=form_builder._executor)
+        resource2.stream.assert_called_once_with(executor=form_builder._executor)
+        mock_stack.enter_async_context.assert_has_awaits(
+            [mock.call(resource1.stream.return_value), mock.call(resource2.stream.return_value)]
+        )
+        mock_form_class.return_value.add_field.assert_has_calls(
+            [
+                mock.call("test_name", "test_data", content_type="mimetype"),
+                mock.call("test_name2", "test_data2", content_type="mimetype2"),
+                mock.call("aye", stream1, filename="testing1", content_type="text"),
+                mock.call("lmao", stream2, filename="testing2", content_type="application/octet-stream"),
+            ]
+        )
 
 
 class TestStringMapBuilder:
@@ -229,35 +276,3 @@ class TestJSONObjectBuilder:
         builder = data_binding.JSONObjectBuilder()
         builder.put_snowflake_array("test", undefined.UNDEFINED)
         assert builder == {}
-
-
-class TestCastJSONArray:
-    def test_cast_is_invoked_with_each_item(self):
-        cast = mock.Mock()
-        arr = ["foo", "bar", "baz"]
-
-        data_binding.cast_json_array(arr, cast)
-
-        assert cast.call_args_list[0] == mock.call("foo")
-        assert cast.call_args_list[1] == mock.call("bar")
-        assert cast.call_args_list[2] == mock.call("baz")
-
-    def test_cast_result_is_used_for_each_item(self):
-        r1 = mock.Mock()
-        r2 = mock.Mock()
-        r3 = mock.Mock()
-        cast = mock.Mock(side_effect=[r1, r2, r3])
-
-        arr = ["foo", "bar", "baz"]
-
-        assert data_binding.cast_json_array(arr, cast) == [r1, r2, r3]
-
-    def test_passes_kwargs_for_every_cast(self):
-        cast = mock.Mock()
-        arr = ["foo", "bar", "baz"]
-
-        data_binding.cast_json_array(arr, cast, foo=42, bar="OK")
-
-        assert cast.call_args_list[0] == mock.call("foo", foo=42, bar="OK")
-        assert cast.call_args_list[1] == mock.call("bar", foo=42, bar="OK")
-        assert cast.call_args_list[2] == mock.call("baz", foo=42, bar="OK")

@@ -31,6 +31,7 @@ from hikari import guilds
 from hikari import invites
 from hikari import messages
 from hikari import snowflakes
+from hikari import stickers
 from hikari import undefined
 from hikari import users
 from hikari import voices
@@ -128,18 +129,6 @@ class TestCacheImpl:
         cache_impl.set_dm_channel_id(StubModel(43123123), StubModel(12222))
 
         assert cache_impl._dm_channel_entries == {43123123: 12222}
-
-    def test_set_dm_channel_id_when_user_not_known(self, cache_impl):
-        cache_impl.set_dm_channel_id(StubModel(43123123), StubModel(12222))
-
-        assert cache_impl._dm_channel_entries == {}
-
-    def test_set_dm_channel_id_when_not_enabled(self, cache_impl):
-        cache_impl._user_entries = collections.FreezableDict({43123123: object()})
-        cache_impl._settings.components = 0
-        cache_impl.set_dm_channel_id(StubModel(43123123), StubModel(12222))
-
-        assert cache_impl._dm_channel_entries == {}
 
     def test__build_emoji(self, cache_impl):
         mock_user = mock.MagicMock(users.User)
@@ -1506,6 +1495,7 @@ class TestCacheImpl:
             user=cache_utilities.RefCell(mock_user),
             guild_id=snowflakes.Snowflake(6434435234),
             nickname="NICK",
+            guild_avatar_hash="only slightly gay",
             role_ids=(snowflakes.Snowflake(65234), snowflakes.Snowflake(654234123)),
             joined_at=datetime.datetime(2020, 7, 9, 13, 11, 18, 384554, tzinfo=datetime.timezone.utc),
             premium_since=datetime.datetime(2020, 7, 17, 13, 11, 18, 384554, tzinfo=datetime.timezone.utc),
@@ -1520,6 +1510,7 @@ class TestCacheImpl:
         assert member.user is not mock_user
         assert member.guild_id == 6434435234
         assert member.nickname == "NICK"
+        assert member.guild_avatar_hash == "only slightly gay"
         assert member.role_ids == (snowflakes.Snowflake(65234), snowflakes.Snowflake(654234123))
         assert member.joined_at == datetime.datetime(2020, 7, 9, 13, 11, 18, 384554, tzinfo=datetime.timezone.utc)
         assert member.premium_since == datetime.datetime(2020, 7, 17, 13, 11, 18, 384554, tzinfo=datetime.timezone.utc)
@@ -1856,6 +1847,7 @@ class TestCacheImpl:
             joined_at=datetime.datetime(2020, 7, 15, 23, 30, 59, 501602, tzinfo=datetime.timezone.utc),
             premium_since=datetime.datetime(2020, 7, 1, 2, 0, 12, 501602, tzinfo=datetime.timezone.utc),
             is_deaf=True,
+            guild_avatar_hash="gay",
             is_mute=False,
             is_pending=True,
         )
@@ -1876,6 +1868,7 @@ class TestCacheImpl:
         assert member_entry.object.nickname == "A NICK LOL"
         assert member_entry.object.role_ids == (65345234, 123123)
         assert member_entry.object.role_ids is not member_model.role_ids
+        assert member_entry.object.guild_avatar_hash == "gay"
         assert isinstance(member_entry.object.role_ids, tuple)
         assert member_entry.object.joined_at == datetime.datetime(
             2020, 7, 15, 23, 30, 59, 501602, tzinfo=datetime.timezone.utc
@@ -2422,12 +2415,13 @@ class TestCacheImpl:
         mock_attachment = mock.MagicMock(messages.Attachment)
         mock_embed_field = mock.MagicMock(embeds.EmbedField)
         mock_embed = mock.MagicMock(embeds.Embed, fields=(mock_embed_field,))
-        mock_sticker = mock.MagicMock(messages.Sticker)
+        mock_sticker = mock.MagicMock(stickers.PartialSticker)
         mock_reaction = mock.MagicMock(messages.Reaction)
         mock_activity = mock.MagicMock(messages.MessageActivity)
         mock_application = mock.MagicMock(messages.MessageApplication)
         mock_reference = mock.MagicMock(messages.MessageReference)
         mock_referenced_message = object()
+        mock_component = object()
         mock_referenced_message_data = mock.Mock(
             cache_utilities.MessageData, build_entity=mock.Mock(return_value=mock_referenced_message)
         )
@@ -2459,6 +2453,7 @@ class TestCacheImpl:
             stickers=(mock_sticker,),
             interaction=mock_interaction,
             application_id=snowflakes.Snowflake(123123123123),
+            components=(mock_component,),
         )
 
         result = cache_impl._build_message(cache_utilities.RefCell(message_data))
@@ -2516,6 +2511,7 @@ class TestCacheImpl:
         assert result.referenced_message is mock_referenced_message
         assert result.application_id == 123123123123
         assert result.interaction is mock_interaction.build_entity.return_value
+        assert result.components == (mock_component,)
 
     def test__build_message_with_null_fields(self, cache_impl):
         mentions = cache_utilities.MentionsData(
@@ -2550,6 +2546,7 @@ class TestCacheImpl:
             stickers=(),
             interaction=None,
             application_id=None,
+            components=(),
         )
 
         result = cache_impl._build_message(cache_utilities.RefCell(message_data))
@@ -2666,6 +2663,11 @@ class TestCacheImpl:
     @pytest.mark.parametrize(
         ("name", "component", "expected"),
         [
+            ("clear_dm_channel_ids", config.CacheComponents.DM_CHANNEL_IDS, cache_utilities.EmptyCacheView()),
+            ("delete_dm_channel_id", config.CacheComponents.DM_CHANNEL_IDS, None),
+            ("get_dm_channel_id", config.CacheComponents.DM_CHANNEL_IDS, None),
+            ("get_dm_channel_ids_view", config.CacheComponents.DM_CHANNEL_IDS, cache_utilities.EmptyCacheView()),
+            ("set_dm_channel_id", config.CacheComponents.DM_CHANNEL_IDS, None),
             ("clear_emojis", config.CacheComponents.EMOJIS, cache_utilities.EmptyCacheView()),
             ("clear_emojis_for_guild", config.CacheComponents.EMOJIS, cache_utilities.EmptyCacheView()),
             ("clear_guild_channels", config.CacheComponents.GUILD_CHANNELS, cache_utilities.EmptyCacheView()),

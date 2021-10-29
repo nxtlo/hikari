@@ -49,10 +49,12 @@ if typing.TYPE_CHECKING:
     from hikari import permissions as permissions_
     from hikari import sessions
     from hikari import snowflakes
+    from hikari import stickers
     from hikari import templates
     from hikari import users
     from hikari import voices
     from hikari import webhooks
+    from hikari.api import entity_factory as entity_factory_
     from hikari.api import special_endpoints
     from hikari.interactions import base_interactions
     from hikari.internal import time
@@ -85,6 +87,7 @@ class TokenStrategy(abc.ABC):
             prefix.
         """
 
+    @abc.abstractmethod
     def invalidate(self, token: typing.Optional[str]) -> None:
         """Invalidate the cached token in this handler.
 
@@ -111,6 +114,11 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
     @abc.abstractmethod
     def is_alive(self) -> bool:
         """Whether this component is alive."""
+
+    @property
+    @abc.abstractmethod
+    def entity_factory(self) -> entity_factory_.EntityFactory:
+        """Entity factory used by this REST client."""
 
     @property
     @abc.abstractmethod
@@ -173,9 +181,6 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             If you are missing the `READ_MESSAGES` permission in the channel.
         hikari.errors.NotFoundError
             If the channel is not found.
-        hikari.errors.RateLimitTooLongError
-            Raised in the event that a rate limit occurs that is
-            longer than `max_rate_limit` when making a request.
         hikari.errors.RateLimitTooLongError
             Raised in the event that a rate limit occurs that is
             longer than `max_rate_limit` when making a request.
@@ -1029,7 +1034,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         ----------
         channel : hikari.snowflakes.SnowflakeishOr[hikari.channels.TextableChannel]
             The channel to fetch messages in. This may be the object or
-            the ID of an existing channel.
+            the ID of an existing message.
         message : hikari.snowflakes.SnowflakeishOr[hikari.messages.PartialMessage]
             The message to fetch. This may be the object or the ID of an
             existing channel.
@@ -1069,10 +1074,12 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         channel: snowflakes.SnowflakeishOr[channels_.TextableChannel],
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         nonce: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         reply: undefined.UndefinedOr[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = undefined.UNDEFINED,
@@ -1107,16 +1114,21 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Other Parameters
         ----------------
-        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
-            If provided, the message embed.
-        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the message embeds.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish],
             If provided, the message attachment. This can be a resource,
             or string of a path on your computer or a URL.
         attachments : hikari.undefined.UndefinedOr[typing.Sequence[hikari.files.Resourceish]],
             If provided, the message attachments. These can be resources, or
             strings consisting of paths on your computer or URLs.
+        component : hikari.undefined.UndefinedOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to include in this message.
+        components : hikari.undefined.UndefinedOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects to include
+            in this message.
+        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
+            If provided, the message embed.
+        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the message embeds.
         tts : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether the message will be read out by a screen
             reader using Discord's TTS (text-to-speech) system.
@@ -1189,16 +1201,19 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         ------
         builtins.ValueError
             If more than 100 unique objects/entities are passed for
-            `role_mentions` or `user_mentions`.
+            `role_mentions` or `user_mentions` or if both `attachment` and
+            `attachments`, `component` and `components` or `embed` and `embeds`
+            are specified.
         builtins.TypeError
-            If both `attachment` and `attachments` are specified.
+            If `attachments`, `components` or `embeds` is passed but is not a
+            sequence.
         hikari.errors.BadRequestError
             This may be raised in several discrete situations, such as messages
             being empty with no attachments or embeds; messages with more than
             2000 characters in them, embeds that exceed one of the many embed
             limits; too many attachments; attachments that are too large;
             invalid image URLs in embeds; if `reply` is not found or not in the
-            same channel as `channel`.
+            same channel as `channel`; too many components.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.ForbiddenError
@@ -1276,10 +1291,14 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         message: snowflakes.SnowflakeishOr[messages_.PartialMessage],
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         mentions_reply: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
@@ -1317,18 +1336,6 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Other Parameters
         ----------------
-        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
-            If provided, the embed to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embed that was provided will be used as the
-            replacement.
-        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the embeds to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embeds that were provided will be used as the
-            replacement.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish]
             If provided, the attachment to set on the message. If
             `hikari.undefined.UNDEFINED`, the previous attachment, if
@@ -1341,6 +1348,27 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             present, are not changed. If this is `builtins.None`, then the
             attachments is removed, if present. Otherwise, the new attachments
             that were provided will be attached.
+        component : hikari.undefined.UndefinedNoneOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to set for this message.
+            This component will replace any previously set components and passing
+            `builtins.None` will remove all components.
+        components : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects set for
+            this message. These components will replace any previously set
+            components and passing `builtins.None` or an empty sequence will
+            remove all components.
+        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
+            If provided, the embed to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embed that was provided will be used as the
+            replacement.
+        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the embeds to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embeds that were provided will be used as the
+            replacement.
         replace_attachments: bool
             Whether to replace the attachments with the provided ones. Defaults
             to `builtins.False`.
@@ -1420,6 +1448,12 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Raises
         ------
+        builtins.ValueError
+            If both `attachment` and `attachments`, `component` and `components`
+            or `embed` and `embeds` are specified.
+        builtins.TypeError
+            If `attachments`, `components` or `embeds` is passed but is not a
+            sequence.
         hikari.errors.BadRequestError
             This may be raised in several discrete situations, such as messages
             being empty with no embeds; messages with more than 2000 characters
@@ -2181,16 +2215,19 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
     @abc.abstractmethod
     async def execute_webhook(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        # MyPy might not say this but SnowflakeishOr[ExecutableWebhook] isn't valid as ExecutableWebhook isn't Unique
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
         username: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         avatar_url: undefined.UndefinedOr[str] = undefined.UNDEFINED,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -2205,7 +2242,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Parameters
         ----------
-        webhook : hikari.snowflakes.SnowflakeishOr[hikari.webhooks.ExecutableWebhook]
+        webhook : typing.Union[hikari.snowflakes.Snowflakeish, hikari.webhooks.ExecutableWebhook]
             The webhook to execute. This may be the object
             or the ID of an existing webhook.
         token: builtins.str
@@ -2233,16 +2270,21 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         avatar_url : hikari.undefined.UndefinedOr[builtins.str]
             If provided, the url of an image to override the webhook's
             avatar with for this request.
-        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
-            If provided, the message embed.
-        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the message embeds.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish],
             If provided, the message attachment. This can be a resource,
             or string of a path on your computer or a URL.
         attachments : hikari.undefined.UndefinedOr[typing.Sequence[hikari.files.Resourceish]],
             If provided, the message attachments. These can be resources, or
             strings consisting of paths on your computer or URLs.
+        component : hikari.undefined.UndefinedOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to include in this message.
+        components : hikari.undefined.UndefinedOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects to include
+            in this message.
+        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
+            If provided, the message embed.
+        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the message embeds.
         tts : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether the message will be read out by a screen
             reader using Discord's TTS (text-to-speech) system.
@@ -2319,16 +2361,16 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         ------
         builtins.ValueError
             If more than 100 unique objects/entities are passed for
-            `role_mentions` or `user_mentions`.
+            `role_mentions` or `user_mentions` or if both `attachment` and
+            `attachments` or `embed` and `embeds` are specified.
         builtins.TypeError
-            If both `attachment` and `attachments` are specified or if both
-            `embed` and `embeds` are specified.
+            If `attachments`, or `embeds` is passed but is not a sequence.
         hikari.errors.BadRequestError
             This may be raised in several discrete situations, such as messages
             being empty with no attachments or embeds; messages with more than
             2000 characters in them, embeds that exceed one of the many embed
             limits; too many attachments; attachments that are too large;
-            invalid image URLs in embeds.
+            invalid image URLs in embeds; too many components.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.NotFoundError
@@ -2351,7 +2393,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
     @abc.abstractmethod
     async def fetch_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        # MyPy might not say this but SnowflakeishOr[ExecutableWebhook] isn't valid as ExecutableWebhook isn't Unique
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.PartialMessage],
     ) -> messages_.Message:
@@ -2359,7 +2402,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Parameters
         ----------
-        webhook : hikari.snowflakes.SnowflakeishOr[hikari.webhooks.ExecutableWebhook]
+        webhook : typing.Union[hikari.snowflakes.Snowflakeish, hikari.webhooks.ExecutableWebhook]
             The webhook to execute. This may be the object
             or the ID of an existing webhook.
         token: builtins.str
@@ -2397,15 +2440,20 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
     @abc.abstractmethod
     async def edit_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        # MyPy might not say this but SnowflakeishOr[ExecutableWebhook] isn't valid as ExecutableWebhook isn't Unique
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.Message],
         content: undefined.UndefinedNoneOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -2419,7 +2467,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Parameters
         ----------
-        webhook : hikari.snowflakes.SnowflakeishOr[hikari.webhooks.ExecutableWebhook]
+        webhook : typing.Union[hikari.snowflakes.Snowflakeish, hikari.webhooks.ExecutableWebhook]
             The webhook to execute. This may be the object
             or the ID of an existing webhook.
         token: builtins.str
@@ -2443,18 +2491,6 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Other Parameters
         ----------------
-        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
-            If provided, the embed to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embed that was provided will be used as the
-            replacement.
-        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the embeds to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embeds that were provided will be used as the
-            replacement.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish]
             If provided, the attachment to set on the message. If
             `hikari.undefined.UNDEFINED`, the previous attachment, if
@@ -2467,6 +2503,27 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             present, are not changed. If this is `builtins.None`, then the
             attachments is removed, if present. Otherwise, the new attachments
             that were provided will be attached.
+        component : hikari.undefined.UndefinedNoneOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to set for this message.
+            This component will replace any previously set components and passing
+            `builtins.None` will remove all components.
+        components : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects set for
+            this message. These components will replace any previously set
+            components and passing `builtins.None` or an empty sequence will
+            remove all components.
+        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
+            If provided, the embed to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embed that was provided will be used as the
+            replacement.
+        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the embeds to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embeds that were provided will be used as the
+            replacement.
         replace_attachments: bool
             Whether to replace the attachments with the provided ones. Defaults
             to `builtins.False`.
@@ -2525,17 +2582,17 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         Raises
         ------
         builtins.ValueError
-            If more than 100 unique objects/entities are passed for
-            `role_mentions` or `user_mentions`.
+            If both `attachment` and `attachments`, `component` and `components`
+            or `embed` and `embeds` are specified.
         builtins.TypeError
-            If both `attachment` and `attachments` are specified or if both
-            `embed` and `embeds` are specified.
+            If `attachments`, `components` or `embeds` is passed but is not a
+            sequence.
         hikari.errors.BadRequestError
             This may be raised in several discrete situations, such as messages
             being empty with no attachments or embeds; messages with more than
             2000 characters in them, embeds that exceed one of the many embed
             limits; too many attachments; attachments that are too large;
-            invalid image URLs in embeds.
+            invalid image URLs in embeds; too many components.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.NotFoundError
@@ -2558,7 +2615,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
     @abc.abstractmethod
     async def delete_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        # MyPy might not say this but SnowflakeishOr[ExecutableWebhook] isn't valid as ExecutableWebhook isn't Unique
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.Message],
     ) -> None:
@@ -2566,7 +2624,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
 
         Parameters
         ----------
-        webhook : hikari.snowflakes.SnowflakeishOr[hikari.webhooks.ExecutableWebhook]
+        webhook : typing.Union[hikari.snowflakes.Snowflakeish, hikari.webhooks.ExecutableWebhook]
             The webhook to execute. This may be the object
             or the ID of an existing webhook.
         token: builtins.str
@@ -3538,7 +3596,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             If any of the fields that are passed have an invalid value or
             if there are no more spaces for the type of emoji in the guild.
         hikari.errors.ForbiddenError
-            If you are missing `MANAGE_EMOJIS` in the server.
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
         hikari.errors.NotFoundError
             If the guild is not found.
         hikari.errors.UnauthorizedError
@@ -3601,7 +3659,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         hikari.errors.BadRequestError
             If any of the fields that are passed have an invalid value.
         hikari.errors.ForbiddenError
-            If you are missing `MANAGE_EMOJIS` in the server.
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
         hikari.errors.NotFoundError
             If the guild or the emoji are not found.
         hikari.errors.UnauthorizedError
@@ -3626,25 +3684,363 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         self,
         guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
         emoji: snowflakes.SnowflakeishOr[emojis.CustomEmoji],
-        # Reason is not currently supported for some reason.
+        *,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> None:
         """Delete an emoji in a guild.
 
         Parameters
         ----------
         guild : hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]
-            The guild to delete the emoji on. This can be a
-            guild object or the ID of an existing guild.
+            The guild to delete the emoji on. This can be a guild object or the
+            ID of an existing guild.
         emoji : hikari.snowflakes.SnowflakeishOr[hikari.emojis.CustomEmoji]
             The emoji to delete. This can be a `hikari.emojis.CustomEmoji`
             or the ID of an existing emoji.
 
+        Other Parameters
+        ----------------
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
         Raises
         ------
         hikari.errors.ForbiddenError
-            If you are missing `MANAGE_EMOJIS` in the server.
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
         hikari.errors.NotFoundError
             If the guild or the emoji are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def fetch_available_sticker_packs(self) -> typing.Sequence[stickers.StickerPack]:
+        """Fetch the available sticker packs.
+
+        Returns
+        -------
+        typing.Sequence[hikari.stickers.StickerPack]
+            The available sticker packs.
+
+        Raises
+        ------
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def fetch_sticker(
+        self,
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+    ) -> typing.Union[stickers.GuildSticker, stickers.StandardSticker]:
+        """Fetch a sticker.
+
+        Parameters
+        ----------
+        sticker : snowflakes.SnowflakeishOr[stickers.PartialSticker]
+            The sticker to fetch. This can be a sticker object or the
+            ID of an existing sticker.
+
+        Returns
+        -------
+        typing.Union[hikari.stickers.GuildSticker, hikari.stickers.StandardSticker]
+            The requested sticker.
+
+        Raises
+        ------
+        hikari.errors.NotFoundError
+            If the sticker is not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def fetch_guild_stickers(
+        self, guild: snowflakes.SnowflakeishOr[guilds.PartialGuild]
+    ) -> typing.Sequence[stickers.GuildSticker]:
+        """Fetch a standard sticker.
+
+        Parameters
+        ----------
+        guild : snowflakes.SnowflakeishOr[stickers.PartialGuild]
+            The guild to request stickers for. This can be a guild object or the
+            ID of an existing guild.
+
+        Returns
+        -------
+        typing.Sequence[hikari.stickers.GuildSticker]
+            The requested stickers.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are not part of the server.
+        hikari.errors.NotFoundError
+            If the guild is not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def fetch_guild_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+    ) -> stickers.GuildSticker:
+        """Fetch a guild sticker.
+
+        Parameters
+        ----------
+        guild : snowflakes.SnowflakeishOr[stickers.PartialGuild]
+            The guild the sticker is in. This can be a guild object or the
+            ID of an existing guild.
+        sticker : snowflakes.SnowflakeishOr[stickers.PartialSticker]
+            The sticker to fetch. This can be a sticker object or the
+            ID of an existing sticker.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The requested sticker.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are not part of the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def create_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        name: str,
+        tag: str,
+        image: files.Resourceish,
+        *,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        """Create a sticker in a guild.
+
+        Parameters
+        ----------
+        guild : hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]
+            The guild to create the sticker on. This can be a guild object or the
+            ID of an existing guild.
+        name : builtins.str
+            The name for the sticker.
+        tag : builtins.str
+            The tag for the sticker.
+        image : hikari.files.Resourceish
+            The 320x320 image for the sticker. Maximum upload size is 500kb.
+            This can be a still or an animated PNG or a Lottie.
+
+            !!! note
+                Lottie support is only available for verified and partnered
+                servers.
+
+        Other Parameters
+        ----------------
+        description: hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the description of the sticker.
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The created sticker.
+
+        Raises
+        ------
+        hikari.errors.BadRequestError
+            If any of the fields that are passed have an invalid value or
+            if there are no more spaces for the sticker in the guild.
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild is not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def edit_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        name: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        tag: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        """Edit a sticker in a guild.
+
+        Parameters
+        ----------
+        guild : hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]
+            The guild to edit the sticker on. This can be a guild object or the
+            ID of an existing guild.
+        sticker : hikari.snowflakes.SnowflakeishOr[hikari.stickers.PartialSticker]
+            The sticker to edit. This can be a sticker object or the ID of an
+            existing sticker.
+
+        Other Parameters
+        ----------------
+        name : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new name for the sticker.
+        description : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new description for the sticker.
+        tag : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the new sticker tag.
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Returns
+        -------
+        hikari.stickers.GuildSticker
+            The edited sticker.
+
+        Raises
+        ------
+        hikari.errors.BadRequestError
+            If any of the fields that are passed have an invalid value.
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def delete_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> None:
+        """Delete a sticker in a guild.
+
+        Parameters
+        ----------
+        guild : hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]
+            The guild to delete the sticker on. This can be a guild object or
+            the ID of an existing guild.
+        sticker : hikari.snowflakes.SnowflakeishOr[hikari.stickers.PartialSticker]
+            The sticker to delete. This can be a sticker object or the ID
+            of an existing sticker.
+
+        Other Parameters
+        ----------------
+        reason : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you are missing `MANAGE_EMOJIS_AND_STICKERS` in the server.
+        hikari.errors.NotFoundError
+            If the guild or the sticker are not found.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.RateLimitTooLongError
@@ -4636,6 +5032,62 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         """
 
     @abc.abstractmethod
+    async def edit_my_member(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        *,
+        nickname: undefined.UndefinedNoneOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> guilds.Member:
+        """Edit the current user's member in a guild.
+
+        Parameters
+        ----------
+        guild : hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]
+            The guild to edit the member in. This may be the object
+            or the ID of an existing guild.
+
+        Other Parameters
+        ----------------
+        nickname : hikari.undefined.UndefinedNoneOr[builtins.str]
+            If provided, the new nickname for the member. If
+            `builtins.None`, will remove the members nickname.
+
+            Requires the `CHANGE_NICKNAME` permission.
+            If provided, the reason that will be recorded in the audit logs.
+            Maximum of 512 characters.
+
+        Returns
+        -------
+        hikari.guilds.Member
+            Object of the member that was updated.
+
+        Raises
+        ------
+        hikari.errors.BadRequestError
+            If any of the fields that are passed have an invalid value.
+        hikari.errors.ForbiddenError
+            If you are missing a permission to do an action.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.NotFoundError
+            If the guild is not found.
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
     async def edit_my_nick(
         self,
         guild: snowflakes.SnowflakeishOr[guilds.Guild],
@@ -4644,6 +5096,9 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> None:
         """Edit the associated token's member nick.
+
+        .. deprecated:: 2.0.0.dev104
+            Use `RESTClient.edit_my_member`'s `nick` argument instead.
 
         Parameters
         ----------
@@ -5082,6 +5537,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         color: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         colour: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         hoist: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        icon: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
+        unicode_emoji: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         mentionable: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> guilds.Role:
@@ -5108,6 +5565,10 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             An alias for `color`.
         hoist : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether to hoist the role.
+        icon : hikari.undefined.UndefinedOr[hikari.files.Resourceish]
+            If provided, the role icon. Must be a 64x64 image under 256kb.
+        unicode_emoji : hikari.undefined.UndefinedOr[builtins.str]
+            If provided, the standard emoji to set as the role icon.
         mentionable : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether to make the role mentionable.
         reason : hikari.undefined.UndefinedOr[builtins.str]
@@ -5122,7 +5583,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         Raises
         ------
         builtins.TypeError
-            If both `color` and `colour` are specified.
+            If both `color` and `colour` are specified or if both `icon` and
+            `unicode_emoji` are specified.
         hikari.errors.BadRequestError
             If any of the fields that are passed have an invalid value.
         hikari.errors.ForbiddenError
@@ -5196,6 +5658,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         color: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         colour: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         hoist: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        icon: undefined.UndefinedNoneOr[files.Resourceish] = undefined.UNDEFINED,
+        unicode_emoji: undefined.UndefinedNoneOr[str] = undefined.UNDEFINED,
         mentionable: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> guilds.Role:
@@ -5222,6 +5686,11 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             An alias for `color`.
         hoist : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether to hoist the role.
+        icon : hikari.undefined.UndefinedNoneOr[hikari.files.Resourceish]
+            If provided, the new role icon. Must be a 64x64 image
+            under 256kb.
+        unicode_emoji : hikari.undefined.UndefinedNoneOr[builtins.str]
+            If provided, the new unicode emoji to set as the role icon.
         mentionable : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether to make the role mentionable.
         reason : hikari.undefined.UndefinedOr[builtins.str]
@@ -5236,7 +5705,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         Raises
         ------
         builtins.TypeError
-            If both `color` and `colour` are specified.
+            If both `color` and `colour` are specified or if both `icon` and
+            `unicode_emoji` are specified.
         hikari.errors.BadRequestError
             If any of the fields that are passed have an invalid value.
         hikari.errors.ForbiddenError
@@ -6232,6 +6702,7 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         guild: undefined.UndefinedOr[snowflakes.SnowflakeishOr[guilds.PartialGuild]] = undefined.UNDEFINED,
         *,
         options: undefined.UndefinedOr[typing.Sequence[commands.CommandOption]] = undefined.UNDEFINED,
+        default_permission: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
     ) -> commands.Command:
         r"""Create an application command.
 
@@ -6253,6 +6724,11 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             a global command rather than a guild specific one.
         options : hikari.undefined.UndefinedOr[typing.Sequence[hikari.commands.CommandOption]]
             A sequence of up to 10 options for this command.
+        default_permission : hikari.undefined.UndefinedOr[builtins.bool]
+            Whether this command should be enabled by default (without any
+            permissions) when added to a guild.
+
+            Defaults to `builtins.True`.
 
         Returns
         -------
@@ -6455,6 +6931,203 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         """
 
     @abc.abstractmethod
+    async def fetch_application_guild_commands_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+    ) -> typing.Sequence[commands.GuildCommandPermissions]:
+        """Fetch the command permissions registered in a guild.
+
+        Parameters
+        ----------
+        application: hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialApplication]
+            Object or ID of the application to fetch the command permissions for.
+        guild : hikari.undefined.UndefinedOr[hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]]
+            Object or ID of the guild to fetch the command permissions for.
+
+        Returns
+        -------
+        typing.Sequence[hikari.commands.GuildCommandPermissions]
+            Sequence of the guild command permissions set for the specified guild.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you cannot access the provided application's commands or guild.
+        hikari.errors.NotFoundError
+            If the provided application isn't found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def fetch_application_command_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        command: snowflakes.SnowflakeishOr[commands.Command],
+    ) -> commands.GuildCommandPermissions:
+        """Fetch the permissions registered for a specific command in a guild.
+
+        Parameters
+        ----------
+        application: hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialApplication]
+            Object or ID of the application to fetch the command permissions for.
+        guild : hikari.undefined.UndefinedOr[hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]]
+            Object or ID of the guild to fetch the command permissions for.
+        command: hikari.snowflakes.SnowflakeishOr[hikari.commands.Command]
+            Objecr or ID of the command to fetch the command permissions for.
+
+        Returns
+        -------
+        hikari.commands.GuildCommandPermissions
+            Object of the command permissions set for the specified command.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you cannot access the provided application's commands or guild.
+        hikari.errors.NotFoundError
+            If the provided application or command isn't found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    async def set_application_guild_commands_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        permissions: typing.Mapping[
+            snowflakes.SnowflakeishOr[commands.Command], typing.Sequence[commands.CommandPermission]
+        ],
+    ) -> typing.Sequence[commands.GuildCommandPermissions]:
+        """Set permissions in a guild for multiple commands.
+
+        !!! note
+            This overwrites any previously set permissions for the specified
+            commands.
+
+        Parameters
+        ----------
+        application: hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialApplication]
+            Object or ID of the application to set the command permissions for.
+        guild : hikari.undefined.UndefinedOr[hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]]
+            Object or ID of the guild to set the command permissions for.
+        permissions : typing.Mapping[hikari.snowflakes.SnowflakeishOr[hikari.commands.Command], typing.Sequence[hikari.commands.CommandPermission]]
+            Mapping of objects and/or IDs of commands to sequences of the commands
+            to set for the specified guild.
+
+            !!! warning
+                Only a maximum of up to 10 permissions can be set per command.
+
+        Returns
+        -------
+        typing.Sequence[hikari.commands.GuildCommandPermissions]
+            Sequence of the set guild command permissions.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you cannot access the provided application's commands or guild.
+        hikari.errors.NotFoundError
+            If the provided application or command isn't found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """  # noqa: E501 - Line too long
+
+    @abc.abstractmethod
+    async def set_application_command_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        command: snowflakes.SnowflakeishOr[commands.Command],
+        permissions: typing.Sequence[commands.CommandPermission],
+    ) -> commands.GuildCommandPermissions:
+        """Set permissions for a specific command.
+
+        !!! note
+            This overwrites any previously set permissions.
+
+        Parameters
+        ----------
+        application: hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialApplication]
+            Object or ID of the application to set the command permissions for.
+        guild : hikari.undefined.UndefinedOr[hikari.snowflakes.SnowflakeishOr[hikari.guilds.PartialGuild]]
+            Object or ID of the guild to set the command permissions for.
+        command : hikari.snowflakes.SnowflakeishOr[hikari.commands.Command]
+            Object or ID of the command to set the permissions for.
+        permissions : typing.Sequence[hikari.commands.CommandPermission]
+            Sequence of up to 10 of the permission objects to set.
+
+        Returns
+        -------
+        hikari.commands.GuildCommandPermissions
+            Object of the set permissions.
+
+        Raises
+        ------
+        hikari.errors.ForbiddenError
+            If you cannot access the provided application's commands or guild.
+        hikari.errors.NotFoundError
+            If the provided application or command isn't found.
+        hikari.errors.UnauthorizedError
+            If you are unauthorized to make the request (invalid/missing token).
+        hikari.errors.RateLimitTooLongError
+            Raised in the event that a rate limit occurs that is
+            longer than `max_rate_limit` when making a request.
+        hikari.errors.RateLimitedError
+            Usually, Hikari will handle and retry on hitting
+            rate-limits automatically. This includes most bucket-specific
+            rate-limits and global rate-limits. In some rare edge cases,
+            however, Discord implements other undocumented rules for
+            rate-limiting, such as limits per attribute. These cannot be
+            detected or handled normally by Hikari due to their undocumented
+            nature, and will trigger this exception if they occur.
+        hikari.errors.InternalServerError
+            If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
     def interaction_deferred_builder(
         self, type: typing.Union[base_interactions.ResponseType, int], /
     ) -> special_endpoints.InteractionDeferredBuilder:
@@ -6539,6 +7212,8 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         *,
         flags: typing.Union[int, messages_.MessageFlag, undefined.UndefinedType] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
         embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
         embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
@@ -6578,6 +7253,11 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             no `embeds` kwarg is provided, then this will instead
             update the embed. This allows for simpler syntax when
             sending an embed alone.
+        component : hikari.undefined.UndefinedOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to include in this message.
+        components : hikari.undefined.UndefinedOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects to include
+            in this message.
         embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
             If provided, the message embed.
         embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
@@ -6649,10 +7329,14 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         token: str,
         content: undefined.UndefinedNoneOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -6686,18 +7370,6 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             `attachments` kwargs are provided, the values will be overwritten.
             This allows for simpler syntax when sending an embed or an
             attachment alone.
-        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
-            If provided, the embed to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embed that was provided will be used as the
-            replacement.
-        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the embeds to set on the message. If
-            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
-            If this is `builtins.None` then any present embeds are removed.
-            Otherwise, the new embeds that were provided will be used as the
-            replacement.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish]
             If provided, the attachment to set on the message. If
             `hikari.undefined.UNDEFINED`, the previous attachment, if
@@ -6710,6 +7382,27 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             present, are not changed. If this is `builtins.None`, then the
             attachments is removed, if present. Otherwise, the new attachments
             that were provided will be attached.
+        component : hikari.undefined.UndefinedNoneOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to set for this message.
+            This component will replace any previously set components and passing
+            `builtins.None` will remove all components.
+        components : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects set for
+            this message. These components will replace any previously set
+            components and passing `builtins.None` or an empty sequence will
+            remove all components.
+        embed : hikari.undefined.UndefinedNoneOr[hikari.embeds.Embed]
+            If provided, the embed to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embed that was provided will be used as the
+            replacement.
+        embeds : hikari.undefined.UndefinedNoneOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the embeds to set on the message. If
+            `hikari.undefined.UNDEFINED`, the previous embed(s) are not changed.
+            If this is `builtins.None` then any present embeds are removed.
+            Otherwise, the new embeds that were provided will be used as the
+            replacement.
         replace_attachments: bool
             Whether to replace the attachments with the provided ones. Defaults
             to `builtins.False`.
@@ -6757,16 +7450,17 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
         Raises
         ------
         builtins.ValueError
-            If more than 100 unique objects/entities are passed for
-            `role_mentions` or `user_mentions`.
+            If both `attachment` and `attachments`, `component` and `components`
+            or `embed` and `embeds` are specified.
         builtins.TypeError
-            If both `embed` and `embeds` are specified.
+            If `attachments`, `components` or `embeds` is passed but is not a
+            sequence.
         hikari.errors.BadRequestError
             This may be raised in several discrete situations, such as messages
             being empty with no attachments or embeds; messages with more than
             2000 characters in them, embeds that exceed one of the many embed
             limits; too many attachments; attachments that are too large;
-            invalid image URLs in embeds.
+            invalid image URLs in embeds; too many components.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.NotFoundError
@@ -6818,4 +7512,14 @@ class RESTClient(traits.NetworkSettingsAware, abc.ABC):
             nature, and will trigger this exception if they occur.
         hikari.errors.InternalServerError
             If an internal error occurs on Discord while handling the request.
+        """
+
+    @abc.abstractmethod
+    def build_action_row(self) -> special_endpoints.ActionRowBuilder:
+        """Build an action row message component for use in message create and REST calls.
+
+        Returns
+        -------
+        hikari.api.special_endpoints.ActionRowBuilder
+            The initialised action row builder.
         """

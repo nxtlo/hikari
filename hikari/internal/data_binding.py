@@ -29,12 +29,11 @@ __all__: typing.List[str] = [
     "JSONObject",
     "JSONArray",
     "JSONish",
-    "URLEncodedForm",
     "dump_json",
     "load_json",
     "JSONDecodeError",
     "JSONObjectBuilder",
-    "cast_json_array",
+    "URLEncodedFormBuilder",
 ]
 
 import typing
@@ -42,10 +41,14 @@ import typing
 import aiohttp
 import multidict
 
+from hikari import files
 from hikari import snowflakes
 from hikari import undefined
 
 if typing.TYPE_CHECKING:
+    import concurrent
+    import contextlib
+
     T = typing.TypeVar("T", covariant=True)
 
 Headers = typing.Mapping[str, str]
@@ -53,9 +56,6 @@ Headers = typing.Mapping[str, str]
 
 Query = typing.Union[typing.Dict[str, str], multidict.MultiDict[str]]
 """Type hint for HTTP query string."""
-
-URLEncodedForm = aiohttp.FormData
-"""Type hint for content of type application/x-www-form-encoded."""
 
 # MyPy does not support recursive types yet. This has been ongoing for a long time, unfortunately.
 # See https://github.com/python/typing/issues/182
@@ -79,6 +79,8 @@ _StringMapBuilderArg = typing.Union[
     typing.Iterable[typing.Tuple[str, str]],
 ]
 
+_APPLICATION_OCTET_STREAM: typing.Final[str] = "application/octet-stream"
+
 if typing.TYPE_CHECKING:
     JSONDecodeError: typing.Type[Exception] = Exception
     """Exception raised when loading an invalid JSON string"""
@@ -101,6 +103,37 @@ else:
 
     JSONDecodeError = json.JSONDecodeError
     """Exception raised when loading an invalid JSON string"""
+
+
+@typing.final
+class URLEncodedFormBuilder:
+    """Helper class to generate `aiohttp.FormData`."""
+
+    __slots__: typing.Sequence[str] = ("_executor", "_fields", "_resources")
+
+    def __init__(self, executor: typing.Optional[concurrent.futures.Executor] = None) -> None:
+        self._executor = executor
+        self._fields: typing.List[typing.Tuple[str, str, typing.Optional[str]]] = []
+        self._resources: typing.List[typing.Tuple[str, files.Resource[files.AsyncReader]]] = []
+
+    def add_field(self, name: str, data: str, *, content_type: typing.Optional[str] = None) -> None:
+        self._fields.append((name, data, content_type))
+
+    def add_resource(self, name: str, resource: files.Resource[files.AsyncReader]) -> None:
+        self._resources.append((name, resource))
+
+    async def build(self, stack: contextlib.AsyncExitStack) -> aiohttp.FormData:
+        form = aiohttp.FormData()
+
+        for field in self._fields:
+            form.add_field(field[0], field[1], content_type=field[2])
+
+        for name, resource in self._resources:
+            stream = await stack.enter_async_context(resource.stream(executor=self._executor))
+            mimetype = stream.mimetype or _APPLICATION_OCTET_STREAM
+            form.add_field(name, stream, filename=stream.filename, content_type=mimetype)
+
+        return form
 
 
 @typing.final
@@ -361,43 +394,3 @@ class JSONObjectBuilder(typing.Dict[str, JSONish]):
         """  # noqa: E501 - Line too long
         if values is not undefined.UNDEFINED:
             self[key] = [str(int(value)) for value in values]
-
-
-def cast_json_array(array: JSONArray, /, cast: typing.Callable[..., T], **kwargs: typing.Any) -> typing.List[T]:
-    """Cast a JSON array to a given generic collection type.
-
-    This will perform casts on each internal item individually.
-
-    Note that
-
-        >>> cast_json_array(raw_list, foo, bar="OK")
-
-    ...is equivalent to doing....
-
-        >>> [foo(item, bar="OK") for item in raw_list]
-
-    Parameters
-    ----------
-    array : JSONArray
-        The raw JSON-decoded array.
-    cast : typing.Callable[[JSONish], T]
-        The cast to apply to each item in the array. This should
-        consume any valid JSON-decoded type and return the type
-        corresponding to the generic type of the provided collection.
-    **kwargs : typing.Any
-        Extra keyword arguments to be passed during every call to cast.
-
-    Returns
-    -------
-    typing.List[T]
-        The generated list.
-
-    Example
-    -------
-    ```py
-    >>> arr = [123, 456, 789, 123]
-    >>> cast_json_array(arr, str)
-    ["123", "456", "789", "123"]
-    ```
-    """
-    return [cast(item, **kwargs) for item in array]

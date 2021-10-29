@@ -112,6 +112,14 @@ class TestPartialChannel:
         model.name = None
         assert str(model) == "Unnamed PartialChannel ID 1234567"
 
+    @pytest.mark.asyncio()
+    async def test_delete(self, model):
+        model.app.rest.delete_channel = mock.AsyncMock()
+
+        assert await model.delete() is model.app.rest.delete_channel.return_value
+
+        model.app.rest.delete_channel.assert_called_once_with(1234567)
+
 
 class TestDMChannel:
     @pytest.fixture()
@@ -249,6 +257,8 @@ class TestTextChannel:
     async def test_send(self, model):
         model.app.rest.create_message = mock.AsyncMock()
         mock_attachment = object()
+        mock_component = object()
+        mock_components = [object(), object()]
         mock_embed = object()
         mock_embeds = object()
         mock_attachments = [object(), object(), object()]
@@ -260,6 +270,8 @@ class TestTextChannel:
             tts=True,
             attachment=mock_attachment,
             attachments=mock_attachments,
+            component=mock_component,
+            components=mock_components,
             embed=mock_embed,
             embeds=mock_embeds,
             reply=mock_reply,
@@ -276,6 +288,8 @@ class TestTextChannel:
             tts=True,
             attachment=mock_attachment,
             attachments=mock_attachments,
+            component=mock_component,
+            components=mock_components,
             embed=mock_embed,
             embeds=mock_embeds,
             reply=mock_reply,

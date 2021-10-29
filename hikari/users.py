@@ -41,10 +41,12 @@ from hikari.internal import routes
 
 if typing.TYPE_CHECKING:
     from hikari import channels
+    from hikari import colors
     from hikari import embeds as embeds_
     from hikari import files
     from hikari import guilds
     from hikari import messages
+    from hikari.api import special_endpoints
 
 
 @typing.final
@@ -135,6 +137,26 @@ class PartialUser(snowflakes.Unique, abc.ABC):
     @abc.abstractmethod
     def avatar_hash(self) -> undefined.UndefinedNoneOr[str]:
         """Avatar hash for the user, if they have one, otherwise `builtins.None`."""
+
+    @property
+    @abc.abstractmethod
+    def banner_hash(self) -> undefined.UndefinedNoneOr[str]:
+        """Banner hash for the user, if they have one, otherwise `hikari.undefined.UNDEFINED`."""
+
+    @property
+    @abc.abstractmethod
+    def accent_color(self) -> undefined.UndefinedNoneOr[colors.Color]:
+        """The custom banner color for the user, if set else `builtins.None`.
+
+        Will be `hikari.undefined.UNDEFINED` if not known.
+
+        The official client will decide the default color if not set.
+        """  # noqa: D401 - Imperative mood
+
+    @property
+    def accent_colour(self) -> undefined.UndefinedNoneOr[colors.Color]:
+        """Alias for the `accent_color` field."""
+        return self.accent_color
 
     @property
     @abc.abstractmethod
@@ -242,10 +264,12 @@ class PartialUser(snowflakes.Unique, abc.ABC):
         self,
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         nonce: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reply: undefined.UndefinedOr[snowflakes.SnowflakeishOr[messages.PartialMessage]] = undefined.UNDEFINED,
@@ -279,16 +303,21 @@ class PartialUser(snowflakes.Unique, abc.ABC):
 
         Other Parameters
         ----------------
-        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
-            If provided, the message embed.
-        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
-            If provided, the message embeds.
         attachment : hikari.undefined.UndefinedOr[hikari.files.Resourceish],
             If provided, the message attachment. This can be a resource,
             or string of a path on your computer or a URL.
         attachments : hikari.undefined.UndefinedOr[typing.Sequence[hikari.files.Resourceish]],
             If provided, the message attachments. These can be resources, or
             strings consisting of paths on your computer or URLs.
+        component : hikari.undefined.UndefinedOr[hikari.api.special_endpoints.ComponentBuilder]
+            If provided, builder object of the component to include in this message.
+        components : hikari.undefined.UndefinedOr[typing.Sequence[hikari.api.special_endpoints.ComponentBuilder]]
+            If provided, a sequence of the component builder objects to include
+            in this message.
+        embed : hikari.undefined.UndefinedOr[hikari.embeds.Embed]
+            If provided, the message embed.
+        embeds : hikari.undefined.UndefinedOr[typing.Sequence[hikari.embeds.Embed]]
+            If provided, the message embeds.
         tts : hikari.undefined.UndefinedOr[builtins.bool]
             If provided, whether the message will be read out by a screen
             reader using Discord's TTS (text-to-speech) system.
@@ -370,7 +399,7 @@ class PartialUser(snowflakes.Unique, abc.ABC):
             2000 characters in them, embeds that exceed one of the many embed
             limits; too many attachments; attachments that are too large;
             invalid image URLs in embeds; `reply` not found or not in the same
-            channel.
+            channel; too many components.
         hikari.errors.UnauthorizedError
             If you are unauthorized to make the request (invalid/missing token).
         hikari.errors.ForbiddenError
@@ -402,10 +431,12 @@ class PartialUser(snowflakes.Unique, abc.ABC):
         return await self.app.rest.create_message(
             channel=channel_id,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             nonce=nonce,
             tts=tts,
             reply=reply,
@@ -431,6 +462,19 @@ class User(PartialUser, abc.ABC):
 
     @property
     @abc.abstractmethod
+    def accent_color(self) -> typing.Optional[colors.Color]:
+        """The custom banner color for the user, if set else `builtins.None`.
+
+        The official client will decide the default color if not set.
+        """  # noqa: D401 - Imperative mood
+
+    @property
+    def accent_colour(self) -> typing.Optional[colors.Color]:
+        """Alias for the `accent_color` field."""
+        return self.accent_color
+
+    @property
+    @abc.abstractmethod
     def avatar_hash(self) -> typing.Optional[str]:
         """Avatar hash for the user, if they have one, otherwise `builtins.None`."""
 
@@ -442,6 +486,19 @@ class User(PartialUser, abc.ABC):
         should use `default_avatar_url` instead.
         """
         return self.make_avatar_url()
+
+    @property
+    @abc.abstractmethod
+    def banner_hash(self) -> typing.Optional[str]:
+        """Banner hash for the user, if they have one, otherwise `hikari.undefined.UNDEFINED`."""
+
+    @property
+    def banner_url(self) -> typing.Optional[files.URL]:
+        """Banner URL for the user, if they have one set.
+
+        May be `builtins.None` if no custom banner is set.
+        """
+        return self.make_banner_url()
 
     @property
     def default_avatar_url(self) -> files.URL:
@@ -545,6 +602,51 @@ class User(PartialUser, abc.ABC):
             file_format=ext,
         )
 
+    def make_banner_url(self, *, ext: typing.Optional[str] = None, size: int = 4096) -> typing.Optional[files.URL]:
+        """Generate the banner URL for this user, if set.
+
+        If no custom banner is set, this returns `builtins.None`.
+
+        Parameters
+        ----------
+        ext : typing.Optional[builtins.str]
+            The ext to use for this URL, defaults to `png` or `gif`.
+            Supports `png`, `jpeg`, `jpg`, `webp` and `gif` (when
+            animated).
+
+            If `builtins.None`, then the correct default extension is
+            determined based on whether the banner is animated or not.
+        size : builtins.int
+            The size to set for the URL, defaults to `4096`.
+            Can be any power of two between 16 and 4096.
+
+        Returns
+        -------
+        typing.Optional[hikari.files.URL]
+            The URL to the banner, or `builtins.None` if not present.
+
+        Raises
+        ------
+        builtins.ValueError
+            If `size` is not a power of two or not between 16 and 4096.
+        """
+        if self.banner_hash is None:
+            return None
+
+        if ext is None:
+            if self.banner_hash.startswith("a_"):
+                ext = "gif"
+            else:
+                ext = "png"
+
+        return routes.CDN_USER_BANNER.compile_to_file(
+            urls.CDN_URL,
+            user_id=self.id,
+            hash=self.banner_hash,
+            size=size,
+            file_format=ext,
+        )
+
 
 @attr_extensions.with_copy
 @attr.define(hash=True, kw_only=True, weakref_slot=False)
@@ -571,6 +673,15 @@ class PartialUserImpl(PartialUser):
 
     avatar_hash: undefined.UndefinedNoneOr[str] = attr.field(eq=False, hash=False, repr=False)
     """Avatar hash of the user, if a custom avatar is set."""
+
+    banner_hash: undefined.UndefinedNoneOr[str] = attr.field(eq=False, hash=False, repr=False)
+    """Banner hash of the user, if a custom banner is set."""
+
+    accent_color: undefined.UndefinedNoneOr[colors.Color] = attr.field(eq=False, hash=False, repr=False)
+    """The custom banner color for the user, if set.
+
+    The official client will decide the default color if not set.
+    """
 
     is_bot: undefined.UndefinedOr[bool] = attr.field(eq=False, hash=False, repr=True)
     """Whether this user is a bot account."""
@@ -622,6 +733,15 @@ class UserImpl(PartialUserImpl, User):
 
     avatar_hash: typing.Optional[str]
     """The user's avatar hash, if they have one, otherwise `builtins.None`."""
+
+    banner_hash: typing.Optional[str]
+    """Banner hash of the user, if they have one, otherwise `builtins.None`"""
+
+    accent_color: typing.Optional[colors.Color]
+    """The custom banner color for the user, if set.
+
+    The official client will decide the default color if not set.
+    """  # noqa: D401 - Imperative mood
 
     is_bot: bool
     """`builtins.True` if this user is a bot account, `builtins.False` otherwise."""
@@ -698,10 +818,12 @@ class OwnUser(UserImpl):
         self,
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         nonce: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reply: undefined.UndefinedOr[snowflakes.SnowflakeishOr[messages.PartialMessage]] = undefined.UNDEFINED,

@@ -37,6 +37,11 @@ class TestPartialUser:
         # ABC, so must be stubbed.
         return hikari_test_helpers.mock_class_namespace(users.PartialUser, slots_=False)()
 
+    def test_accent_colour_alias_property(self, obj):
+        obj.accent_color = object()
+
+        assert obj.accent_colour is obj.accent_color
+
     @pytest.mark.asyncio()
     async def test_fetch_self(self, obj):
         obj.id = 123
@@ -52,6 +57,8 @@ class TestPartialUser:
         embeds = [object()]
         attachment = object()
         attachments = [object(), object()]
+        component = object()
+        components = [object(), object()]
         user_mentions = [object(), object()]
         role_mentions = [object(), object()]
         reply = object()
@@ -66,6 +73,8 @@ class TestPartialUser:
             embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
             nonce="nonce",
             tts=True,
             reply=reply,
@@ -86,6 +95,8 @@ class TestPartialUser:
             embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
             nonce="nonce",
             tts=True,
             mentions_everyone=False,
@@ -98,33 +109,11 @@ class TestPartialUser:
     @pytest.mark.asyncio()
     async def test_send_when_not_cached(self, obj):
         obj.id = 522234
-        embed = object()
-        embeds = [object(), object()]
-        attachment = object()
-        attachments = [object(), object()]
-        user_mentions = [object(), object()]
-        role_mentions = [object(), object()]
-        reply = object()
-        mentions_reply = object()
-
         obj.app = mock.Mock(spec=traits.CacheAware, rest=mock.AsyncMock())
         obj.app.cache.get_dm_channel_id = mock.Mock(return_value=None)
         obj.fetch_dm_channel = mock.AsyncMock()
 
-        returned = await obj.send(
-            content="test",
-            embed=embed,
-            embeds=embeds,
-            attachment=attachment,
-            attachments=attachments,
-            nonce="nonce",
-            tts=True,
-            reply=reply,
-            mentions_everyone=False,
-            user_mentions=user_mentions,
-            role_mentions=role_mentions,
-            mentions_reply=mentions_reply,
-        )
+        returned = await obj.send()
 
         assert returned is obj.app.rest.create_message.return_value
 
@@ -132,67 +121,49 @@ class TestPartialUser:
         obj.fetch_dm_channel.assert_awaited_once()
         obj.app.rest.create_message.assert_awaited_once_with(
             channel=obj.fetch_dm_channel.return_value.id,
-            content="test",
-            embed=embed,
-            embeds=embeds,
-            attachment=attachment,
-            attachments=attachments,
-            nonce="nonce",
-            tts=True,
-            mentions_everyone=False,
-            reply=reply,
-            user_mentions=user_mentions,
-            role_mentions=role_mentions,
-            mentions_reply=mentions_reply,
+            content=undefined.UNDEFINED,
+            embed=undefined.UNDEFINED,
+            embeds=undefined.UNDEFINED,
+            attachment=undefined.UNDEFINED,
+            attachments=undefined.UNDEFINED,
+            component=undefined.UNDEFINED,
+            components=undefined.UNDEFINED,
+            nonce=undefined.UNDEFINED,
+            tts=undefined.UNDEFINED,
+            mentions_everyone=undefined.UNDEFINED,
+            reply=undefined.UNDEFINED,
+            user_mentions=undefined.UNDEFINED,
+            role_mentions=undefined.UNDEFINED,
+            mentions_reply=undefined.UNDEFINED,
         )
 
     @pytest.mark.asyncio()
     async def test_send_when_not_cache_aware(self, obj):
         obj.id = 522234
-        embed = object()
-        embeds = [object(), object()]
-        attachment = object()
-        attachments = [object(), object()]
-        user_mentions = [object(), object()]
-        role_mentions = [object(), object()]
-        reply = object()
-        mentions_reply = object()
-
         obj.app = mock.Mock(spec=traits.RESTAware, rest=mock.AsyncMock())
         obj.fetch_dm_channel = mock.AsyncMock()
 
-        returned = await obj.send(
-            content="test",
-            embed=embed,
-            embeds=embeds,
-            attachment=attachment,
-            attachments=attachments,
-            nonce="nonce",
-            tts=True,
-            reply=reply,
-            mentions_everyone=False,
-            user_mentions=user_mentions,
-            role_mentions=role_mentions,
-            mentions_reply=mentions_reply,
-        )
+        returned = await obj.send()
 
         assert returned is obj.app.rest.create_message.return_value
 
         obj.fetch_dm_channel.assert_awaited_once()
         obj.app.rest.create_message.assert_awaited_once_with(
             channel=obj.fetch_dm_channel.return_value.id,
-            content="test",
-            embed=embed,
-            embeds=embeds,
-            attachment=attachment,
-            attachments=attachments,
-            nonce="nonce",
-            tts=True,
-            mentions_everyone=False,
-            reply=reply,
-            user_mentions=user_mentions,
-            role_mentions=role_mentions,
-            mentions_reply=mentions_reply,
+            content=undefined.UNDEFINED,
+            embed=undefined.UNDEFINED,
+            embeds=undefined.UNDEFINED,
+            attachment=undefined.UNDEFINED,
+            attachments=undefined.UNDEFINED,
+            component=undefined.UNDEFINED,
+            components=undefined.UNDEFINED,
+            nonce=undefined.UNDEFINED,
+            tts=undefined.UNDEFINED,
+            mentions_everyone=undefined.UNDEFINED,
+            reply=undefined.UNDEFINED,
+            user_mentions=undefined.UNDEFINED,
+            role_mentions=undefined.UNDEFINED,
+            mentions_reply=undefined.UNDEFINED,
         )
 
     @pytest.mark.asyncio()
@@ -212,15 +183,14 @@ class TestUser:
         # ABC, so must be stubbed.
         return hikari_test_helpers.mock_class_namespace(users.User, slots_=False)()
 
-    def test_avatar_url_when_hash(self, obj):
-        avatar = object()
+    def test_accent_colour_alias_property(self, obj):
+        obj.accent_color = object()
 
-        with mock.patch.object(users.User, "make_avatar_url", return_value=avatar):
-            assert obj.avatar_url is avatar
+        assert obj.accent_colour is obj.accent_color
 
-    def test_avatar_url_when_no_hash(self, obj):
-        with mock.patch.object(users.User, "make_avatar_url", return_value=None):
-            assert obj.avatar_url is None
+    def test_avatar_url_property(self, obj):
+        with mock.patch.object(users.User, "make_avatar_url") as make_avatar_url:
+            assert obj.avatar_url is make_avatar_url.return_value
 
     def test_make_avatar_url_when_no_hash(self, obj):
         obj.avatar_hash = None
@@ -289,6 +259,66 @@ class TestUser:
             file_format="png",
         )
 
+    def test_banner_url_property(self, obj):
+        with mock.patch.object(users.User, "make_banner_url") as make_banner_url:
+            assert obj.banner_url is make_banner_url.return_value
+
+    def test_make_banner_url_when_no_hash(self, obj):
+        obj.banner_hash = None
+
+        with mock.patch.object(routes, "CDN_USER_BANNER") as route:
+            assert obj.make_banner_url(ext=None, size=4096) is None
+
+        route.compile_to_file.assert_not_called()
+
+    def test_make_banner_url_when_format_is_None_and_banner_hash_is_for_gif(self, obj):
+        obj.banner_hash = "a_18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_USER_BANNER", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert obj.make_banner_url(ext=None, size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            user_id=obj.id,
+            hash="a_18dnf8dfbakfdh",
+            size=4096,
+            file_format="gif",
+        )
+
+    def test_make_banner_url_when_format_is_None_and_banner_hash_is_not_for_gif(self, obj):
+        obj.banner_hash = "18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_USER_BANNER", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert obj.make_banner_url(ext=None, size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            user_id=obj.id,
+            hash=obj.banner_hash,
+            size=4096,
+            file_format="png",
+        )
+
+    def test_make_banner_url_with_all_args(self, obj):
+        obj.banner_hash = "18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_USER_BANNER", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert obj.make_banner_url(ext="url", size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            user_id=obj.id,
+            hash=obj.banner_hash,
+            size=4096,
+            file_format="url",
+        )
+
 
 class TestPartialUserImpl:
     @pytest.fixture()
@@ -299,6 +329,8 @@ class TestPartialUserImpl:
             discriminator="8637",
             username="thomm.o",
             avatar_hash=None,
+            banner_hash=None,
+            accent_color=None,
             is_bot=False,
             is_system=False,
             flags=users.UserFlag.DISCORD_EMPLOYEE,
@@ -332,6 +364,8 @@ class TestOwnUser:
             discriminator="1234",
             username="foobar",
             avatar_hash="69420",
+            banner_hash="42069",
+            accent_color=123456,
             is_bot=False,
             is_system=False,
             flags=users.UserFlag.PARTNERED_SERVER_OWNER,

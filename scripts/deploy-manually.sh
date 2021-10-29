@@ -32,13 +32,13 @@ posix_read "Twine username" TWINE_USERNAME
 posix_read "Twine password" TWINE_PASSWORD
 posix_read "GitHub deploy token" GITHUB_TOKEN
 posix_read "Discord deployment webhook URL" DEPLOY_WEBHOOK_URL
-posix_read "Tag" GITHUB_TAG
+posix_read "Tag" VERSION
 posix_read "Repo slug (e.g. hikari-py/hikari)" GITHUB_REPO_SLUG
 
 git checkout "${GITHUB_TAG}"
-GITHUB_SHA=$(git rev-parse HEAD)
-echo "Detected GITHUB_SHA to be ${GITHUB_SHA}"
+export REF=$(git rev-parse HEAD)
+echo "Detected REF to be ${REF}"
 
 set -x
 rm public -Rf || true
-. scripts/deploy.sh
+bash scripts/deploy.sh

@@ -135,6 +135,8 @@ class TestRole:
             color=colors.Color(0x1A2B3C),
             guild_id=snowflakes.Snowflake(112233),
             is_hoisted=False,
+            icon_hash="icon_hash",
+            unicode_emoji=None,
             is_managed=False,
             is_mentionable=True,
             permissions=permissions.Permissions.CONNECT,
@@ -146,6 +148,32 @@ class TestRole:
 
     def test_colour_property(self, model):
         assert model.colour == colors.Color(0x1A2B3C)
+
+    def test_icon_url_property(self, model):
+        with mock.patch.object(guilds.Role, "make_icon_url") as make_icon_url:
+            assert model.icon_url == make_icon_url.return_value
+
+            model.make_icon_url.assert_called_once_with()
+
+    def test_make_icon_url_when_hash_is_None(self, model):
+        model.icon_hash = None
+
+        with mock.patch.object(
+            routes, "CDN_ROLE_ICON", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert model.make_icon_url(ext="jpeg", size=1) is None
+
+        route.compile_to_file.assert_not_called()
+
+    def test_make_icon_url_when_hash_is_not_None(self, model):
+        with mock.patch.object(
+            routes, "CDN_ROLE_ICON", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert model.make_icon_url(ext="jpeg", size=1) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL, role_id=979899100, hash="icon_hash", size=1, file_format="jpeg"
+        )
 
 
 class TestGuildWidget:
@@ -192,6 +220,7 @@ class TestMember:
             is_pending=False,
             joined_at=datetime.datetime.now().astimezone(),
             nickname="davb",
+            guild_avatar_hash="dab",
             premium_since=None,
             role_ids=[
                 snowflakes.Snowflake(456),
@@ -230,10 +259,86 @@ class TestMember:
     def test_avatar_url_property(self, model, mock_user):
         assert model.avatar_url is mock_user.avatar_url
 
+    def test_banner_hash_property(self, model, mock_user):
+        assert model.banner_hash is mock_user.banner_hash
+
+    def test_banner_url_property(self, model, mock_user):
+        assert model.banner_url is mock_user.banner_url
+
+    def test_accent_color_property(self, model, mock_user):
+        assert model.accent_color is mock_user.accent_color
+
+    def test_guild_avatar_url_property(self, model):
+        with mock.patch.object(guilds.Member, "make_guild_avatar_url") as make_guild_avatar_url:
+            assert model.guild_avatar_url is make_guild_avatar_url.return_value
+
     def test_make_avatar_url(self, model, mock_user):
         result = model.make_avatar_url(ext="png", size=4096)
         mock_user.make_avatar_url.assert_called_once_with(ext="png", size=4096)
         assert result is mock_user.make_avatar_url.return_value
+
+    def test_make_guild_avatar_url_when_no_hash(self, model):
+        model.guild_avatar_hash = None
+        assert model.make_guild_avatar_url(ext="png", size=1024) is None
+
+    def test_make_guild_avatar_url_when_format_is_None_and_avatar_hash_is_for_gif(self, model):
+        model.guild_avatar_hash = "a_18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_MEMBER_AVATAR", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert model.make_guild_avatar_url(ext=None, size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            user_id=model.id,
+            guild_id=model.guild_id,
+            hash=model.guild_avatar_hash,
+            size=4096,
+            file_format="gif",
+        )
+
+    def test_make_guild_avatar_url_when_format_is_None_and_avatar_hash_is_not_for_gif(self, model):
+        model.guild_avatar_hash = "18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_MEMBER_AVATAR", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert model.make_guild_avatar_url(ext=None, size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            user_id=model.id,
+            guild_id=model.guild_id,
+            hash=model.guild_avatar_hash,
+            size=4096,
+            file_format="png",
+        )
+
+    def test_make_guild_avatar_url_with_all_args(self, model):
+        model.guild_avatar_hash = "18dnf8dfbakfdh"
+
+        with mock.patch.object(
+            routes, "CDN_MEMBER_AVATAR", new=mock.Mock(compile_to_file=mock.Mock(return_value="file"))
+        ) as route:
+            assert model.make_guild_avatar_url(ext="url", size=4096) == "file"
+
+        route.compile_to_file.assert_called_once_with(
+            urls.CDN_URL,
+            guild_id=model.guild_id,
+            user_id=model.id,
+            hash=model.guild_avatar_hash,
+            size=4096,
+            file_format="url",
+        )
+
+    @pytest.mark.asyncio()
+    async def test_fetch_dm_channel(self, model):
+        model.user.fetch_dm_channel = mock.AsyncMock()
+
+        assert await model.fetch_dm_channel() is model.user.fetch_dm_channel.return_value
+
+        model.user.fetch_dm_channel.assert_awaited_once_with()
 
     @pytest.mark.asyncio()
     async def test_fetch_self(self, model):
@@ -528,6 +633,73 @@ class TestPartialGuild:
 
         model.app.rest.fetch_emoji.assert_awaited_once_with(model.id, 349)
         assert emoji is model.app.rest.fetch_emoji.return_value
+
+    @pytest.mark.asyncio()
+    async def test_fetch_stickers(self, model):
+        model.app.rest.fetch_guild_stickers = mock.AsyncMock()
+
+        stickers = await model.fetch_stickers()
+
+        model.app.rest.fetch_guild_stickers.assert_awaited_once_with(model.id)
+        assert stickers is model.app.rest.fetch_guild_stickers.return_value
+
+    @pytest.mark.asyncio()
+    async def test_fetch_sticker(self, model):
+        model.app.rest.fetch_guild_sticker = mock.AsyncMock()
+
+        sticker = await model.fetch_sticker(6969)
+
+        model.app.rest.fetch_guild_sticker.assert_awaited_once_with(model.id, 6969)
+        assert sticker is model.app.rest.fetch_guild_sticker.return_value
+
+    @pytest.mark.asyncio()
+    async def test_create_sticker(self, model):
+        model.app.rest.create_sticker = mock.AsyncMock()
+        file = object()
+
+        sticker = await model.create_sticker("NewSticker", "funny", file)
+
+        model.app.rest.create_sticker.assert_awaited_once_with(
+            90210,
+            "NewSticker",
+            "funny",
+            file,
+            description=undefined.UNDEFINED,
+            reason=undefined.UNDEFINED,
+        )
+
+        assert sticker is model.app.rest.create_sticker.return_value
+
+    @pytest.mark.asyncio()
+    async def test_edit_sticker(self, model):
+        model.app.rest.edit_sticker = mock.AsyncMock()
+
+        sticker = await model.edit_sticker(4567, name="Brilliant", tag="parmesan", description="amazing")
+
+        model.app.rest.edit_sticker.assert_awaited_once_with(
+            90210,
+            4567,
+            name="Brilliant",
+            tag="parmesan",
+            description="amazing",
+            reason=undefined.UNDEFINED,
+        )
+
+        assert sticker is model.app.rest.edit_sticker.return_value
+
+    @pytest.mark.asyncio()
+    async def test_delete_sticker(self, model):
+        model.app.rest.delete_sticker = mock.AsyncMock()
+
+        sticker = await model.delete_sticker(951)
+
+        model.app.rest.delete_sticker.assert_awaited_once_with(
+            90210,
+            951,
+            reason=undefined.UNDEFINED,
+        )
+
+        assert sticker is model.app.rest.delete_sticker.return_value
 
     @pytest.mark.asyncio()
     async def test_create_category(self, model):

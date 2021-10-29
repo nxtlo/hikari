@@ -35,12 +35,12 @@
 
     hljs_style = "atom-one-dark"
 
-    # Doesnt really do anything, just enables lurn_search
+    # Doesn't really do anything, just enables lurn_search
     lunr_search = {"fuzziness": 0}
 
     site_accent = "#ff029a"
     site_logo_name = "logo.png"
-    site_logo_url = "https://hikari-py.github.io/hikari/logo.png"
+    site_logo_url = "https://hikari-py.dev/logo.png"
     site_description = "A Discord Bot framework for modern Python and asyncio built on good intentions"
 
     # Versions of stuff

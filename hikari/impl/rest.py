@@ -28,15 +28,10 @@ RESTful functionality.
 
 from __future__ import annotations
 
-__all__: typing.List[str] = [
-    "ClientCredentialsStrategy",
-    "RESTApp",
-    "RESTClientImpl",
-]
+__all__: typing.List[str] = ["ClientCredentialsStrategy", "RESTApp", "RESTClientImpl"]
 
 import asyncio
 import base64
-import collections
 import contextlib
 import copy
 import datetime
@@ -74,6 +69,7 @@ from hikari.impl import entity_factory as entity_factory_impl
 from hikari.impl import rate_limits
 from hikari.impl import special_endpoints as special_endpoints_impl
 from hikari.internal import data_binding
+from hikari.internal import deprecation
 from hikari.internal import mentions
 from hikari.internal import net
 from hikari.internal import routes
@@ -89,6 +85,7 @@ if typing.TYPE_CHECKING:
     from hikari import invites
     from hikari import messages as messages_
     from hikari import sessions
+    from hikari import stickers
     from hikari import templates
     from hikari import voices
     from hikari import webhooks
@@ -113,6 +110,8 @@ _X_RATELIMIT_BUCKET_HEADER: typing.Final[str] = sys.intern("X-RateLimit-Bucket")
 _X_RATELIMIT_LIMIT_HEADER: typing.Final[str] = sys.intern("X-RateLimit-Limit")
 _X_RATELIMIT_REMAINING_HEADER: typing.Final[str] = sys.intern("X-RateLimit-Remaining")
 _X_RATELIMIT_RESET_AFTER_HEADER: typing.Final[str] = sys.intern("X-RateLimit-Reset-After")
+_RETRY_ERROR_CODES: typing.Final[typing.Set[int]] = {500, 502, 503, 504}
+_MAX_BACKOFF_DURATION: typing.Final[int] = 16
 
 
 class ClientCredentialsStrategy(rest_api.TokenStrategy):
@@ -259,7 +258,7 @@ class _RESTProvider(traits.RESTAware):
         return self._rest().proxy_settings
 
 
-_NONE_OR_UNDEFINED: typing.Final[typing.Set[undefined.UndefinedOr[None]]] = {None, undefined.UNDEFINED}
+_NONE_OR_UNDEFINED: typing.Final[typing.Tuple[None, undefined.UndefinedType]] = (None, undefined.UNDEFINED)
 
 
 class RESTApp(traits.ExecutorAware):
@@ -287,6 +286,9 @@ class RESTApp(traits.ExecutorAware):
         rate limits.
 
         Defaults to five minutes if unspecified.
+    max_retries : typing.Optional[builtins.int]
+        Maximum number of times a request will be retried if
+        it fails with a `5xx` status. Defaults to 3 if set to `builtins.None`.
     proxy_settings : typing.Optional[hikari.config.ProxySettings]
         Proxy settings to use. If `builtins.None` then no proxy configuration
         will be used.
@@ -303,6 +305,7 @@ class RESTApp(traits.ExecutorAware):
         "_executor",
         "_http_settings",
         "_max_rate_limit",
+        "_max_retries",
         "_proxy_settings",
         "_url",
     )
@@ -313,6 +316,7 @@ class RESTApp(traits.ExecutorAware):
         executor: typing.Optional[concurrent.futures.Executor] = None,
         http_settings: typing.Optional[config.HTTPSettings] = None,
         max_rate_limit: float = 300,
+        max_retries: int = 3,
         proxy_settings: typing.Optional[config.ProxySettings] = None,
         url: typing.Optional[str] = None,
     ) -> None:
@@ -320,6 +324,7 @@ class RESTApp(traits.ExecutorAware):
         self._proxy_settings = config.ProxySettings() if proxy_settings is None else proxy_settings
         self._executor = executor
         self._max_rate_limit = max_rate_limit
+        self._max_retries = max_retries
         self._url = url
 
     @property
@@ -408,6 +413,7 @@ class RESTApp(traits.ExecutorAware):
             executor=self._executor,
             http_settings=self._http_settings,
             max_rate_limit=self._max_rate_limit,
+            max_retries=self._max_retries,
             proxy_settings=self._proxy_settings,
             token=token,
             token_type=token_type,
@@ -481,6 +487,11 @@ class _LiveAttributes:
         return self
 
 
+@attr.define(auto_exc=True, repr=False, weakref_slot=False)
+class _RetryRequest(RuntimeError):
+    ...
+
+
 class RESTClientImpl(rest_api.RESTClient):
     """Implementation of the V8-compatible Discord HTTP API.
 
@@ -502,6 +513,9 @@ class RESTClientImpl(rest_api.RESTClient):
 
         This is provided since some endpoints may respond with non-sensible
         rate limits.
+    max_retries : typing.Optional[builtins.int]
+        Maximum number of times a request will be retried if
+        it fails with a `5xx` status. Defaults to 3 if set to `builtins.None`.
     token : typing.Union[builtins.str, builtins.None, hikari.api.rest.TokenStrategy]
         The bot or bearer token. If no token is to be used,
         this can be undefined.
@@ -521,6 +535,7 @@ class RESTClientImpl(rest_api.RESTClient):
     builtins.ValueError
         * If `token_type` is provided when a token strategy is passed for `token`.
         * if `token_type` is left as `builtins.None` when a string is passed for `token`.
+        * If the a value more than 5 is provided for `max_retries`
     """
 
     __slots__: typing.Sequence[str] = (
@@ -530,15 +545,12 @@ class RESTClientImpl(rest_api.RESTClient):
         "_http_settings",
         "_live_attributes",
         "_max_rate_limit",
+        "_max_retries",
         "_proxy_settings",
         "_rest_url",
         "_token",
         "_token_type",
     )
-
-    @attr.define(auto_exc=True, repr=False, weakref_slot=False)
-    class _RetryRequest(RuntimeError):
-        ...
 
     def __init__(
         self,
@@ -548,17 +560,22 @@ class RESTClientImpl(rest_api.RESTClient):
         executor: typing.Optional[concurrent.futures.Executor],
         http_settings: config.HTTPSettings,
         max_rate_limit: float,
+        max_retries: int = 3,
         proxy_settings: config.ProxySettings,
         token: typing.Union[str, None, rest_api.TokenStrategy],
         token_type: typing.Union[applications.TokenType, str, None],
         rest_url: typing.Optional[str],
     ) -> None:
+        if max_retries > 5:
+            raise ValueError("'max_retries' must be below or equal to 5")
+
         self._cache = cache
         self._entity_factory = entity_factory
         self._executor = executor
         self._http_settings = http_settings
         self._live_attributes: typing.Optional[_LiveAttributes] = None
         self._max_rate_limit = max_rate_limit
+        self._max_retries = max_retries
         self._proxy_settings = proxy_settings
 
         self._token: typing.Union[str, rest_api.TokenStrategy, None] = None
@@ -590,6 +607,10 @@ class RESTClientImpl(rest_api.RESTClient):
     @property
     def proxy_settings(self) -> config.ProxySettings:
         return self._proxy_settings
+
+    @property
+    def entity_factory(self) -> entity_factory_.EntityFactory:
+        return self._entity_factory
 
     @property
     def token_type(self) -> typing.Union[str, applications.TokenType, None]:
@@ -667,7 +688,7 @@ class RESTClientImpl(rest_api.RESTClient):
         compiled_route: routes.CompiledRoute,
         *,
         query: typing.Optional[data_binding.StringMapBuilder] = None,
-        form: typing.Optional[aiohttp.FormData] = None,
+        form_builder: typing.Optional[data_binding.URLEncodedFormBuilder] = None,
         json: typing.Union[data_binding.JSONObjectBuilder, data_binding.JSONArray, None] = None,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         no_auth: bool = False,
@@ -679,7 +700,7 @@ class RESTClientImpl(rest_api.RESTClient):
         headers = data_binding.StringMapBuilder()
         headers.setdefault(_USER_AGENT_HEADER, _HTTP_USER_AGENT)
 
-        retried = False
+        re_authed = False
         token: typing.Optional[str] = None
         if auth:
             headers[_AUTHORIZATION_HEADER] = auth
@@ -695,10 +716,19 @@ class RESTClientImpl(rest_api.RESTClient):
         headers.put(_X_AUDIT_LOG_REASON_HEADER, reason)
 
         url = compiled_route.create_url(self._rest_url)
+
+        # This is initiated the first time we hit a 5xx error to save a little memory when nothing goes wrong
+        backoff: typing.Optional[rate_limits.ExponentialBackOff] = None
+        retry_count = 0
+
+        stack = contextlib.AsyncExitStack()
         while True:
             try:
                 uuid = time.uuid()
-                async with live_attributes.still_alive().buckets.acquire(compiled_route):
+                async with stack:
+                    form = await form_builder.build(stack) if form_builder else None
+
+                    await stack.enter_async_context(live_attributes.still_alive().buckets.acquire(compiled_route))
                     # Buckets not using authentication still have a global
                     # rate limit, but it is different from the token one.
                     if not no_auth:
@@ -749,7 +779,7 @@ class RESTClientImpl(rest_api.RESTClient):
                 if response.status == http.HTTPStatus.NO_CONTENT:
                     return None
 
-                # Handle the response.
+                # Handle the response when everything went good
                 if 200 <= response.status < 300:
                     if response.content_type == _APPLICATION_JSON:
                         # Only deserializing here stops Cloudflare shenanigans messing us around.
@@ -758,18 +788,36 @@ class RESTClientImpl(rest_api.RESTClient):
                     real_url = str(response.real_url)
                     raise errors.HTTPError(f"Expected JSON [{response.content_type=}, {real_url=}]")
 
-                can_re_auth = response.status == 401 and not (auth or no_auth or retried)
+                # Handling 5xx errors
+                if response.status in _RETRY_ERROR_CODES and retry_count < self._max_retries:
+                    if backoff is None:
+                        backoff = rate_limits.ExponentialBackOff(maximum=_MAX_BACKOFF_DURATION)
+
+                    sleep_time = next(backoff)
+                    _LOGGER.warning(
+                        "Received status %s on request, backing off for %.2fs and retrying. Retries remaining: %s",
+                        response.status,
+                        sleep_time,
+                        self._max_retries - retry_count,
+                    )
+                    retry_count += 1
+
+                    await asyncio.sleep(sleep_time)
+                    continue
+
+                # Attempt to re-auth on UNAUTHORIZED if we are using a TokenStrategy
+                can_re_auth = response.status == 401 and not (auth or no_auth or re_authed)
                 if can_re_auth and isinstance(self._token, rest_api.TokenStrategy):
                     assert token is not None
                     self._token.invalidate(token)
                     token = await self._token.acquire(self)
                     headers[_AUTHORIZATION_HEADER] = token
-                    retried = True
+                    re_authed = True
                     continue
 
                 await self._handle_error_response(response)
 
-            except self._RetryRequest:
+            except _RetryRequest:
                 continue
 
     @staticmethod
@@ -840,7 +888,7 @@ class RESTClientImpl(rest_api.RESTClient):
                 "rate limited on bucket %s, maybe you are running more than one bot on this token? Retrying request...",
                 bucket,
             )
-            raise self._RetryRequest
+            raise _RetryRequest
 
         if response.content_type != _APPLICATION_JSON:
             # We don't know exactly what this could imply. It is likely Cloudflare interfering
@@ -863,14 +911,14 @@ class RESTClientImpl(rest_api.RESTClient):
                 "contacting Discord to raise this limit. Backing off and retrying request..."
             )
             live_attributes.still_alive().global_rate_limit.throttle(body_retry_after)
-            raise self._RetryRequest
+            raise _RetryRequest
 
         # If the values are within 20% of each other by relativistic tolerance, it is probably
         # safe to retry the request, as they are likely the same value just with some
         # measuring difference. 20% was used as a rounded figure.
         if math.isclose(body_retry_after, reset_after, rel_tol=0.20):
             _LOGGER.error("rate limited on a sub bucket on bucket %s, but it is safe to retry", bucket)
-            raise self._RetryRequest
+            raise _RetryRequest
 
         raise errors.RateLimitedError(
             url=str(response.real_url),
@@ -1023,6 +1071,7 @@ class RESTClientImpl(rest_api.RESTClient):
                     "Cannot determine the type of the target to update. Try specifying 'target_type' manually."
                 )
 
+        target = target.id if isinstance(target, channels_.PermissionOverwrite) else target
         route = routes.PUT_CHANNEL_PERMISSIONS.compile(channel=channel, overwrite=target)
         body = data_binding.JSONObjectBuilder()
         body.put("type", target_type)
@@ -1046,7 +1095,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_CHANNEL_INVITES.compile(channel=channel)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_invite_with_metadata)
+        return [self._entity_factory.deserialize_invite_with_metadata(invite_payload) for invite_payload in response]
 
     async def create_invite(
         self,
@@ -1089,7 +1138,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_CHANNEL_PINS.compile(channel=channel)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_message)
+        return [self._entity_factory.deserialize_message(message_pl) for message_pl in response]
 
     async def pin_message(
         self,
@@ -1168,10 +1217,12 @@ class RESTClientImpl(rest_api.RESTClient):
         *,
         no_auth: bool = False,
         content: undefined.UndefinedOr[typing.Any],
-        embed: undefined.UndefinedOr[embeds_.Embed],
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]],
         attachment: undefined.UndefinedOr[files.Resourceish],
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]],
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed],
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]],
         tts: undefined.UndefinedOr[bool],
         mentions_everyone: undefined.UndefinedOr[bool],
         mentions_reply: undefined.UndefinedOr[bool],
@@ -1181,18 +1232,27 @@ class RESTClientImpl(rest_api.RESTClient):
         if not undefined.any_undefined(attachment, attachments):
             raise ValueError("You may only specify one of 'attachment' or 'attachments', not both")
 
+        if not undefined.any_undefined(component, components):
+            raise ValueError("You may only specify one of 'component' or 'components', not both")
+
         if not undefined.any_undefined(embed, embeds):
             raise ValueError("You may only specify one of 'embed' or 'embeds', not both")
 
         if attachments is not undefined.UNDEFINED and not isinstance(attachments, typing.Collection):
-            raise ValueError(
+            raise TypeError(
                 "You passed a non-collection to 'attachments', but this expects a collection. Maybe you meant to "
                 "use 'attachment' (singular) instead?"
             )
 
-        if embeds is not undefined.UNDEFINED and not isinstance(embeds, typing.Collection):
+        if components is not undefined.UNDEFINED and not isinstance(components, typing.Collection):
             raise TypeError(
-                "You passed a non collection to 'embeds', but this expects a collection. Maybe you meant to "
+                "You passed a non-collection to 'components', but this expects a collection. Maybe you meant to "
+                "use 'component' (singular) instead?"
+            )
+
+        if embeds not in _NONE_OR_UNDEFINED and not isinstance(embeds, typing.Collection):
+            raise TypeError(
+                "You passed a non-collection to 'embeds', but this expects a collection. Maybe you meant to "
                 "use 'embed' (singular) instead?"
             )
 
@@ -1218,6 +1278,12 @@ class RESTClientImpl(rest_api.RESTClient):
         if attachments is not undefined.UNDEFINED:
             final_attachments.extend([files.ensure_resource(a) for a in attachments])
 
+        if component is not undefined.UNDEFINED:
+            body.put("components", [component.build()])
+
+        elif components is not undefined.UNDEFINED:
+            body.put("components", [component.build() for component in components])
+
         serialized_embeds: undefined.UndefinedOr[data_binding.JSONArray] = undefined.UNDEFINED
 
         if embed is not undefined.UNDEFINED:
@@ -1240,20 +1306,13 @@ class RESTClientImpl(rest_api.RESTClient):
         body.put("embeds", serialized_embeds)
 
         if final_attachments:
-            form = data_binding.URLEncodedForm()
+            form = data_binding.URLEncodedFormBuilder(executor=self._executor)
             form.add_field("payload_json", data_binding.dump_json(body), content_type=_APPLICATION_JSON)
 
-            stack = contextlib.AsyncExitStack()
+            for i, attachment in enumerate(final_attachments):
+                form.add_resource(f"file{i}", attachment)
 
-            try:
-                for i, attachment in enumerate(final_attachments):
-                    stream = await stack.enter_async_context(attachment.stream(executor=self._executor))
-                    mimetype = stream.mimetype or _APPLICATION_OCTET_STREAM
-                    form.add_field(f"file{i}", stream, filename=stream.filename, content_type=mimetype)
-
-                response = await self._request(route, form=form, query=query, no_auth=no_auth)
-            finally:
-                await stack.aclose()
+            response = await self._request(route, form_builder=form, query=query, no_auth=no_auth)
         else:
             response = await self._request(route, json=body, query=query, no_auth=no_auth)
 
@@ -1265,10 +1324,12 @@ class RESTClientImpl(rest_api.RESTClient):
         channel: snowflakes.SnowflakeishOr[channels_.TextableChannel],
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         nonce: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         reply: undefined.UndefinedOr[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = undefined.UNDEFINED,
@@ -1289,10 +1350,12 @@ class RESTClientImpl(rest_api.RESTClient):
             route,
             body,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             tts=tts,
             mentions_everyone=mentions_everyone,
             mentions_reply=mentions_reply,
@@ -1319,10 +1382,14 @@ class RESTClientImpl(rest_api.RESTClient):
         *,
         no_auth: bool = False,
         content: undefined.UndefinedOr[typing.Any],
-        embed: undefined.UndefinedNoneOr[embeds_.Embed],
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]],
         attachment: undefined.UndefinedOr[files.Resourceish],
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]],
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed],
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]],
         replace_attachments: bool,
         mentions_everyone: undefined.UndefinedOr[bool],
         mentions_reply: undefined.UndefinedOr[bool],
@@ -1332,18 +1399,27 @@ class RESTClientImpl(rest_api.RESTClient):
         if not undefined.any_undefined(attachment, attachments):
             raise ValueError("You may only specify one of 'attachment' or 'attachments', not both")
 
+        if not undefined.any_undefined(component, components):
+            raise ValueError("You may only specify one of 'component' or 'components', not both")
+
         if not undefined.any_undefined(embed, embeds):
             raise ValueError("You may only specify one of 'embed' or 'embeds', not both")
 
         if attachments is not undefined.UNDEFINED and not isinstance(attachments, typing.Collection):
-            raise ValueError(
+            raise TypeError(
                 "You passed a non-collection to 'attachments', but this expects a collection. Maybe you meant to "
                 "use 'attachment' (singular) instead?"
             )
 
+        if components is not undefined.UNDEFINED and not isinstance(components, typing.Collection):
+            raise TypeError(
+                "You passed a non-collection to 'components', but this expects a collection. Maybe you meant to "
+                "use 'component' (singular) instead?"
+            )
+
         if embeds not in _NONE_OR_UNDEFINED and not isinstance(embeds, typing.Collection):
             raise TypeError(
-                "You passed a non collection to 'embeds', but this expects a collection. Maybe you meant to "
+                "You passed a non-collection to 'embeds', but this expects a collection. Maybe you meant to "
                 "use 'embed' (singular) instead?"
             )
 
@@ -1379,8 +1455,21 @@ class RESTClientImpl(rest_api.RESTClient):
         if attachments is not undefined.UNDEFINED:
             final_attachments.extend([files.ensure_resource(a) for a in attachments])
 
+        serialized_components: typing.Optional[typing.List[data_binding.JSONObject]] = None
+        if component is not undefined.UNDEFINED:
+            if component is not None:
+                serialized_components = [component.build()]
+
+            body.put("components", serialized_components)
+
+        elif components is not undefined.UNDEFINED:
+            if components is not None:
+                serialized_components = [component.build() for component in components]
+
+            body.put("components", serialized_components)
+
         serialized_embeds: data_binding.JSONArray = []
-        update_embeds: bool = False
+        update_embeds = False
         if embed is not undefined.UNDEFINED:
             update_embeds = True
             if embed is not None:
@@ -1402,19 +1491,13 @@ class RESTClientImpl(rest_api.RESTClient):
             body.put("attachments", None)
 
         if final_attachments:
-            form = data_binding.URLEncodedForm()
-            form.add_field("payload_json", data_binding.dump_json(body), content_type=_APPLICATION_JSON)
+            form_builder = data_binding.URLEncodedFormBuilder(executor=self._executor)
+            form_builder.add_field("payload_json", data_binding.dump_json(body), content_type=_APPLICATION_JSON)
 
-            stack = contextlib.AsyncExitStack()
-            try:
-                for i, attachment in enumerate(final_attachments):
-                    stream = await stack.enter_async_context(attachment.stream(executor=self._executor))
-                    mimetype = stream.mimetype or _APPLICATION_OCTET_STREAM
-                    form.add_field(f"file{i}", stream, filename=stream.filename, content_type=mimetype)
+            for i, attachment in enumerate(final_attachments):
+                form_builder.add_resource(f"file{i}", attachment)
 
-                response = await self._request(route, form=form, no_auth=no_auth)
-            finally:
-                await stack.aclose()
+            response = await self._request(route, form_builder=form_builder, no_auth=no_auth)
         else:
             response = await self._request(route, json=body, no_auth=no_auth)
 
@@ -1427,10 +1510,14 @@ class RESTClientImpl(rest_api.RESTClient):
         message: snowflakes.SnowflakeishOr[messages_.PartialMessage],
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         mentions_reply: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
@@ -1449,10 +1536,12 @@ class RESTClientImpl(rest_api.RESTClient):
             route,
             body,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             replace_attachments=replace_attachments,
             mentions_everyone=mentions_everyone,
             mentions_reply=mentions_reply,
@@ -1480,8 +1569,8 @@ class RESTClientImpl(rest_api.RESTClient):
     ) -> None:
         route = routes.POST_DELETE_CHANNEL_MESSAGES_BULK.compile(channel=channel)
 
-        pending: typing.Deque[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = collections.deque()
-        deleted: typing.Deque[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = collections.deque()
+        pending: typing.List[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = []
+        deleted: typing.List[snowflakes.SnowflakeishOr[messages_.PartialMessage]] = []
 
         if isinstance(messages, typing.Iterable):  # Syntactic sugar. Allows to use iterables
             pending.extend(messages)
@@ -1509,15 +1598,25 @@ class RESTClientImpl(rest_api.RESTClient):
             # I am just gonna invoke these sequentially instead.
             try:
                 if len(pending) == 1:
-                    message = pending.popleft()
-                    await self.delete_message(channel, message)
+                    message = pending[0]
+                    try:
+                        await self.delete_message(channel, message)
+                    except errors.NotFoundError as exc:
+                        # If the message is not found then this error should be suppressed
+                        # to keep consistency with how the bulk delete endpoint functions.
+                        if exc.code != 10008:  # Unknown Message
+                            raise
+
                     deleted.append(message)
+
                 else:
                     body = data_binding.JSONObjectBuilder()
-                    chunk = [pending.popleft() for _ in range(min(100, len(pending)))]
+                    chunk = pending[:100]
                     body.put_snowflake_array("messages", chunk)
                     await self._request(route, json=body)
                     deleted += chunk
+
+                pending = pending[100:]
             except Exception as ex:
                 raise errors.BulkDeleteError(deleted, pending) from ex
 
@@ -1664,7 +1763,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_CHANNEL_WEBHOOKS.compile(channel=channel)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_webhook)
+        return [self._entity_factory.deserialize_webhook(webhook_pl) for webhook_pl in response]
 
     async def fetch_guild_webhooks(
         self,
@@ -1673,7 +1772,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_WEBHOOKS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_webhook)
+        return [self._entity_factory.deserialize_webhook(webhook_payload) for webhook_payload in response]
 
     async def edit_webhook(
         self,
@@ -1724,16 +1823,18 @@ class RESTClientImpl(rest_api.RESTClient):
 
     async def execute_webhook(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         content: undefined.UndefinedOr[typing.Any] = undefined.UNDEFINED,
         *,
         username: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         avatar_url: undefined.UndefinedOr[str] = undefined.UNDEFINED,
-        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
+        embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -1744,7 +1845,9 @@ class RESTClientImpl(rest_api.RESTClient):
         ] = undefined.UNDEFINED,
         flags: typing.Union[undefined.UndefinedType, int, messages_.MessageFlag] = undefined.UNDEFINED,
     ) -> messages_.Message:
-        route = routes.POST_WEBHOOK_WITH_TOKEN.compile(webhook=webhook, token=token)
+        # int(ExecutableWebhook) isn't guaranteed to be valid nor the ID used to execute this entity as a webhook.
+        webhook_id = webhook if isinstance(webhook, int) else webhook.webhook_id
+        route = routes.POST_WEBHOOK_WITH_TOKEN.compile(webhook=webhook_id, token=token)
 
         body = data_binding.JSONObjectBuilder()
         body.put("username", username)
@@ -1758,10 +1861,12 @@ class RESTClientImpl(rest_api.RESTClient):
             query,
             no_auth=True,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             tts=tts,
             mentions_everyone=mentions_everyone,
             user_mentions=user_mentions,
@@ -1771,26 +1876,32 @@ class RESTClientImpl(rest_api.RESTClient):
 
     async def fetch_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.PartialMessage],
     ) -> messages_.Message:
-        route = routes.GET_WEBHOOK_MESSAGE.compile(webhook=webhook, token=token, message=message)
+        # int(ExecutableWebhook) isn't guaranteed to be valid nor the ID used to execute this entity as a webhook.
+        webhook_id = webhook if isinstance(webhook, int) else webhook.webhook_id
+        route = routes.GET_WEBHOOK_MESSAGE.compile(webhook=webhook_id, token=token, message=message)
         response = await self._request(route, no_auth=True)
         assert isinstance(response, dict)
         return self._entity_factory.deserialize_message(response)
 
     async def edit_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.Message],
         content: undefined.UndefinedNoneOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -1800,17 +1911,20 @@ class RESTClientImpl(rest_api.RESTClient):
             typing.Union[snowflakes.SnowflakeishSequence[guilds.PartialRole], bool]
         ] = undefined.UNDEFINED,
     ) -> messages_.Message:
-        route = routes.PATCH_WEBHOOK_MESSAGE.compile(webhook=webhook, token=token, message=message)
-        body = data_binding.JSONObjectBuilder()
+        # int(ExecutableWebhook) isn't guaranteed to be valid nor the ID used to execute this entity as a webhook.
+        webhook_id = webhook if isinstance(webhook, int) else webhook.webhook_id
+        route = routes.PATCH_WEBHOOK_MESSAGE.compile(webhook=webhook_id, token=token, message=message)
         return await self._edit_message(
             route,
-            body,
+            data_binding.JSONObjectBuilder(),
             no_auth=True,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             replace_attachments=replace_attachments,
             mentions_everyone=mentions_everyone,
             mentions_reply=undefined.UNDEFINED,
@@ -1820,11 +1934,13 @@ class RESTClientImpl(rest_api.RESTClient):
 
     async def delete_webhook_message(
         self,
-        webhook: snowflakes.SnowflakeishOr[webhooks.ExecutableWebhook],
+        webhook: typing.Union[webhooks.ExecutableWebhook, snowflakes.Snowflakeish],
         token: str,
         message: snowflakes.SnowflakeishOr[messages_.Message],
     ) -> None:
-        route = routes.DELETE_WEBHOOK_MESSAGE.compile(webhook=webhook, token=token, message=message)
+        # int(ExecutableWebhook) isn't guaranteed to be valid nor the ID used to execute this entity as a webhook.
+        webhook_id = webhook if isinstance(webhook, int) else webhook.webhook_id
+        route = routes.DELETE_WEBHOOK_MESSAGE.compile(webhook=webhook_id, token=token, message=message)
         await self._request(route, no_auth=True)
 
     async def fetch_gateway_url(self) -> str:
@@ -1888,7 +2004,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_MY_CONNECTIONS.compile()
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_own_connection)
+        return [self._entity_factory.deserialize_own_connection(connection_payload) for connection_payload in response]
 
     def fetch_my_guilds(
         self,
@@ -1951,11 +2067,11 @@ class RESTClientImpl(rest_api.RESTClient):
         scopes: typing.Sequence[typing.Union[applications.OAuth2Scope, str]],
     ) -> applications.PartialOAuth2Token:
         route = routes.POST_TOKEN.compile()
-        form = data_binding.URLEncodedForm()
+        form = data_binding.URLEncodedFormBuilder()
         form.add_field("grant_type", "client_credentials")
         form.add_field("scope", " ".join(scopes))
 
-        response = await self._request(route, form=form, auth=self._gen_oauth2_token(client, client_secret))
+        response = await self._request(route, form_builder=form, auth=self._gen_oauth2_token(client, client_secret))
         assert isinstance(response, dict)
         return self._entity_factory.deserialize_partial_token(response)
 
@@ -1967,12 +2083,12 @@ class RESTClientImpl(rest_api.RESTClient):
         redirect_uri: str,
     ) -> applications.OAuth2AuthorizationToken:
         route = routes.POST_TOKEN.compile()
-        form = data_binding.URLEncodedForm()
+        form = data_binding.URLEncodedFormBuilder()
         form.add_field("grant_type", "authorization_code")
         form.add_field("code", code)
         form.add_field("redirect_uri", redirect_uri)
 
-        response = await self._request(route, form=form, auth=self._gen_oauth2_token(client, client_secret))
+        response = await self._request(route, form_builder=form, auth=self._gen_oauth2_token(client, client_secret))
         assert isinstance(response, dict)
         return self._entity_factory.deserialize_authorization_token(response)
 
@@ -1987,14 +2103,14 @@ class RESTClientImpl(rest_api.RESTClient):
         ] = undefined.UNDEFINED,
     ) -> applications.OAuth2AuthorizationToken:
         route = routes.POST_TOKEN.compile()
-        form = data_binding.URLEncodedForm()
+        form = data_binding.URLEncodedFormBuilder()
         form.add_field("grant_type", "refresh_token")
         form.add_field("refresh_token", refresh_token)
 
         if scopes is not undefined.UNDEFINED:
             form.add_field("scope", " ".join(scopes))
 
-        response = await self._request(route, form=form, auth=self._gen_oauth2_token(client, client_secret))
+        response = await self._request(route, form_builder=form, auth=self._gen_oauth2_token(client, client_secret))
         assert isinstance(response, dict)
         return self._entity_factory.deserialize_authorization_token(response)
 
@@ -2005,9 +2121,9 @@ class RESTClientImpl(rest_api.RESTClient):
         token: typing.Union[str, applications.PartialOAuth2Token],
     ) -> None:
         route = routes.POST_TOKEN_REVOKE.compile()
-        form = data_binding.URLEncodedForm()
+        form = data_binding.URLEncodedFormBuilder()
         form.add_field("token", str(token))
-        await self._request(route, form=form, auth=self._gen_oauth2_token(client, client_secret))
+        await self._request(route, form_builder=form, auth=self._gen_oauth2_token(client, client_secret))
 
     async def add_user_to_guild(
         self,
@@ -2039,7 +2155,9 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_VOICE_REGIONS.compile()
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_voice_region)
+        return [
+            self._entity_factory.deserialize_voice_region(voice_region_payload) for voice_region_payload in response
+        ]
 
     async def fetch_user(self, user: snowflakes.SnowflakeishOr[users.PartialUser]) -> users.User:
         route = routes.GET_USER.compile(user=user)
@@ -2089,9 +2207,11 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_EMOJIS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(
-            response, self._entity_factory.deserialize_known_custom_emoji, guild_id=snowflakes.Snowflake(guild)
-        )
+        guild_id = snowflakes.Snowflake(guild)
+        return [
+            self._entity_factory.deserialize_known_custom_emoji(emoji_payload, guild_id=guild_id)
+            for emoji_payload in response
+        ]
 
     async def create_emoji(
         self,
@@ -2137,9 +2257,104 @@ class RESTClientImpl(rest_api.RESTClient):
         self,
         guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
         emoji: snowflakes.SnowflakeishOr[emojis.CustomEmoji],
+        *,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> None:
         route = routes.DELETE_GUILD_EMOJI.compile(guild=guild, emoji=emoji)
-        await self._request(route)
+        await self._request(route, reason=reason)
+
+    async def fetch_available_sticker_packs(self) -> typing.Sequence[stickers.StickerPack]:
+        route = routes.GET_STICKER_PACKS.compile()
+        response = await self._request(route, no_auth=True)
+        assert isinstance(response, dict)
+        return [
+            self._entity_factory.deserialize_sticker_pack(sticker_pack_payload)
+            for sticker_pack_payload in response["sticker_packs"]
+        ]
+
+    async def fetch_sticker(
+        self,
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+    ) -> typing.Union[stickers.StandardSticker, stickers.GuildSticker]:
+        route = routes.GET_STICKER.compile(sticker=sticker)
+        response = await self._request(route)
+        assert isinstance(response, dict)
+        return (
+            self._entity_factory.deserialize_guild_sticker(response)
+            if "guild_id" in response
+            else self._entity_factory.deserialize_standard_sticker(response)
+        )
+
+    async def fetch_guild_stickers(
+        self, guild: snowflakes.SnowflakeishOr[guilds.PartialGuild]
+    ) -> typing.Sequence[stickers.GuildSticker]:
+        route = routes.GET_GUILD_STICKERS.compile(guild=guild)
+        response = await self._request(route)
+        assert isinstance(response, list)
+        return [
+            self._entity_factory.deserialize_guild_sticker(guild_sticker_payload) for guild_sticker_payload in response
+        ]
+
+    async def fetch_guild_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+    ) -> stickers.GuildSticker:
+        route = routes.GET_GUILD_STICKER.compile(guild=guild, sticker=sticker)
+        response = await self._request(route)
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_guild_sticker(response)
+
+    async def create_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        name: str,
+        tag: str,
+        image: files.Resourceish,
+        *,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        route = routes.POST_GUILD_STICKERS.compile(guild=guild)
+        form = data_binding.URLEncodedFormBuilder(executor=self._executor)
+        form.add_field("name", name)
+        form.add_field("tags", tag)
+        form.add_field("description", description or "")
+        form.add_resource("file", files.ensure_resource(image))
+
+        response = await self._request(route, form_builder=form, reason=reason)
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_guild_sticker(response)
+
+    async def edit_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        name: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        description: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        tag: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> stickers.GuildSticker:
+        route = routes.PATCH_GUILD_STICKER.compile(guild=guild, sticker=sticker)
+        body = data_binding.JSONObjectBuilder()
+        body.put("name", name)
+        body.put("tags", tag)
+        body.put("description", description)
+
+        response = await self._request(route, json=body, reason=reason)
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_guild_sticker(response)
+
+    async def delete_sticker(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        sticker: snowflakes.SnowflakeishOr[stickers.PartialSticker],
+        *,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> None:
+        route = routes.DELETE_GUILD_STICKER.compile(guild=guild, sticker=sticker)
+        await self._request(route, reason=reason)
 
     def guild_builder(self, name: str, /) -> special_endpoints.GuildBuilder:
         return special_endpoints_impl.GuildBuilder(
@@ -2251,7 +2466,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_CHANNELS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        channel_sequence = data_binding.cast_json_array(response, self._entity_factory.deserialize_channel)
+        channel_sequence = [self._entity_factory.deserialize_channel(channel_payload) for channel_payload in response]
         # Will always be guild channels unless Discord messes up severely on something!
         return typing.cast("typing.Sequence[channels_.GuildChannel]", channel_sequence)
 
@@ -2481,9 +2696,10 @@ class RESTClientImpl(rest_api.RESTClient):
         query.put("limit", 1000)
         response = await self._request(route, query=query)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(
-            response, self._entity_factory.deserialize_member, guild_id=snowflakes.Snowflake(guild)
-        )
+        guild_id = snowflakes.Snowflake(guild)
+        return [
+            self._entity_factory.deserialize_member(member_payload, guild_id=guild_id) for member_payload in response
+        ]
 
     async def edit_member(
         self,
@@ -2515,6 +2731,22 @@ class RESTClientImpl(rest_api.RESTClient):
         assert isinstance(response, dict)
         return self._entity_factory.deserialize_member(response, guild_id=snowflakes.Snowflake(guild))
 
+    async def edit_my_member(
+        self,
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        *,
+        nickname: undefined.UndefinedNoneOr[str] = undefined.UNDEFINED,
+        reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
+    ) -> guilds.Member:
+        route = routes.PATCH_MY_GUILD_MEMBER.compile(guild=guild)
+        body = data_binding.JSONObjectBuilder()
+        body.put("nick", nickname)
+
+        response = await self._request(route, json=body, reason=reason)
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_member(response, guild_id=snowflakes.Snowflake(guild))
+
+    @deprecation.deprecated("2.0.0.dev104", alternative="RESTClientImpl.edit_my_member's nickname parameter")
     async def edit_my_nick(
         self,
         guild: snowflakes.SnowflakeishOr[guilds.Guild],
@@ -2522,10 +2754,7 @@ class RESTClientImpl(rest_api.RESTClient):
         *,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> None:
-        route = routes.PATCH_MY_GUILD_NICKNAME.compile(guild=guild)
-        body = data_binding.JSONObjectBuilder()
-        body.put("nick", nick)
-        await self._request(route, json=body, reason=reason)
+        await self.edit_my_member(guild, nickname=nick, reason=reason)
 
     async def add_role_to_member(
         self,
@@ -2571,10 +2800,8 @@ class RESTClientImpl(rest_api.RESTClient):
     ) -> None:
         body = data_binding.JSONObjectBuilder()
         body.put("delete_message_days", delete_message_days)
-        # This endpoint specifies a reason in the body, specifically.
-        body.put("reason", reason)
         route = routes.PUT_GUILD_BAN.compile(guild=guild, user=user)
-        await self._request(route, json=body)
+        await self._request(route, json=body, reason=reason)
 
     ban_member = ban_user
 
@@ -2606,7 +2833,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_BANS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_guild_member_ban)
+        return [self._entity_factory.deserialize_guild_member_ban(ban_payload) for ban_payload in response]
 
     async def fetch_roles(
         self,
@@ -2615,9 +2842,8 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_ROLES.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(
-            response, self._entity_factory.deserialize_role, guild_id=snowflakes.Snowflake(guild)
-        )
+        guild_id = snowflakes.Snowflake(guild)
+        return [self._entity_factory.deserialize_role(role_payload, guild_id=guild_id) for role_payload in response]
 
     async def create_role(
         self,
@@ -2628,11 +2854,16 @@ class RESTClientImpl(rest_api.RESTClient):
         color: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         colour: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         hoist: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        icon: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
+        unicode_emoji: undefined.UndefinedOr[str] = undefined.UNDEFINED,
         mentionable: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> guilds.Role:
         if not undefined.any_undefined(color, colour):
             raise TypeError("Can not specify 'color' and 'colour' together.")
+
+        if not undefined.any_undefined(icon, unicode_emoji):
+            raise TypeError("Can not specify 'icon' and 'unicode_emoji' together.")
 
         route = routes.POST_GUILD_ROLES.compile(guild=guild)
         body = data_binding.JSONObjectBuilder()
@@ -2641,7 +2872,13 @@ class RESTClientImpl(rest_api.RESTClient):
         body.put("color", color, conversion=colors.Color.of)
         body.put("color", colour, conversion=colors.Color.of)
         body.put("hoist", hoist)
+        body.put("unicode_emoji", unicode_emoji)
         body.put("mentionable", mentionable)
+
+        if icon is not undefined.UNDEFINED:
+            icon_resource = files.ensure_resource(icon)
+            async with icon_resource.stream(executor=self._executor) as stream:
+                body.put("icon", await stream.data_uri())
 
         response = await self._request(route, json=body, reason=reason)
         assert isinstance(response, dict)
@@ -2666,11 +2903,16 @@ class RESTClientImpl(rest_api.RESTClient):
         color: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         colour: undefined.UndefinedOr[colors.Colorish] = undefined.UNDEFINED,
         hoist: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        icon: undefined.UndefinedNoneOr[files.Resourceish] = undefined.UNDEFINED,
+        unicode_emoji: undefined.UndefinedNoneOr[str] = undefined.UNDEFINED,
         mentionable: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         reason: undefined.UndefinedOr[str] = undefined.UNDEFINED,
     ) -> guilds.Role:
         if not undefined.any_undefined(color, colour):
             raise TypeError("Can not specify 'color' and 'colour' together.")
+
+        if not undefined.any_undefined(icon, unicode_emoji):
+            raise TypeError("Can not specify 'icon' and 'unicode_emoji' together.")
 
         route = routes.PATCH_GUILD_ROLE.compile(guild=guild, role=role)
 
@@ -2680,7 +2922,15 @@ class RESTClientImpl(rest_api.RESTClient):
         body.put("color", color, conversion=colors.Color.of)
         body.put("color", colour, conversion=colors.Color.of)
         body.put("hoist", hoist)
+        body.put("unicode_emoji", unicode_emoji)
         body.put("mentionable", mentionable)
+
+        if icon is None:
+            body.put("icon", None)
+        elif icon is not undefined.UNDEFINED:
+            icon_resource = files.ensure_resource(icon)
+            async with icon_resource.stream(executor=self._executor) as stream:
+                body.put("icon", await stream.data_uri())
 
         response = await self._request(route, json=body, reason=reason)
         assert isinstance(response, dict)
@@ -2737,7 +2987,9 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_VOICE_REGIONS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_voice_region)
+        return [
+            self._entity_factory.deserialize_voice_region(voice_region_payload) for voice_region_payload in response
+        ]
 
     async def fetch_guild_invites(
         self,
@@ -2746,7 +2998,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_INVITES.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_invite_with_metadata)
+        return [self._entity_factory.deserialize_invite_with_metadata(invite_payload) for invite_payload in response]
 
     async def fetch_integrations(
         self,
@@ -2755,9 +3007,11 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_INTEGRATIONS.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(
-            response, self._entity_factory.deserialize_integration, guild_id=snowflakes.Snowflake(guild)
-        )
+        guild_id = snowflakes.Snowflake(guild)
+        return [
+            self._entity_factory.deserialize_integration(integration_payload, guild_id=guild_id)
+            for integration_payload in response
+        ]
 
     async def fetch_widget(self, guild: snowflakes.SnowflakeishOr[guilds.PartialGuild]) -> guilds.GuildWidget:
         route = routes.GET_GUILD_WIDGET.compile(guild=guild)
@@ -2836,7 +3090,7 @@ class RESTClientImpl(rest_api.RESTClient):
         route = routes.GET_GUILD_TEMPLATES.compile(guild=guild)
         response = await self._request(route)
         assert isinstance(response, list)
-        return data_binding.cast_json_array(response, self._entity_factory.deserialize_template)
+        return [self._entity_factory.deserialize_template(template_payload) for template_payload in response]
 
     async def sync_guild_template(
         self,
@@ -2959,6 +3213,7 @@ class RESTClientImpl(rest_api.RESTClient):
         guild: undefined.UndefinedOr[snowflakes.SnowflakeishOr[guilds.PartialGuild]] = undefined.UNDEFINED,
         *,
         options: undefined.UndefinedOr[typing.Sequence[commands.CommandOption]] = undefined.UNDEFINED,
+        default_permission: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
     ) -> commands.Command:
         if guild is undefined.UNDEFINED:
             route = routes.POST_APPLICATION_COMMAND.compile(application=application)
@@ -2970,6 +3225,7 @@ class RESTClientImpl(rest_api.RESTClient):
         body.put("name", name)
         body.put("description", description)
         body.put_array("options", options, conversion=self._entity_factory.serialize_command_option)
+        body.put("default_permission", default_permission)
 
         response = await self._request(route, json=body)
         assert isinstance(response, dict)
@@ -3039,6 +3295,67 @@ class RESTClientImpl(rest_api.RESTClient):
 
         await self._request(route)
 
+    async def fetch_application_guild_commands_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+    ) -> typing.Sequence[commands.GuildCommandPermissions]:
+        route = routes.GET_APPLICATION_GUILD_COMMANDS_PERMISSIONS.compile(application=application, guild=guild)
+        response = await self._request(route)
+        assert isinstance(response, list)
+        return [self._entity_factory.deserialize_guild_command_permissions(payload) for payload in response]
+
+    async def fetch_application_command_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        command: snowflakes.SnowflakeishOr[commands.Command],
+    ) -> commands.GuildCommandPermissions:
+        route = routes.GET_APPLICATION_COMMAND_PERMISSIONS.compile(
+            application=application, guild=guild, command=command
+        )
+        response = await self._request(route)
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_guild_command_permissions(response)
+
+    async def set_application_guild_commands_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        permissions: typing.Mapping[
+            snowflakes.SnowflakeishOr[commands.Command], typing.Sequence[commands.CommandPermission]
+        ],
+    ) -> typing.Sequence[commands.GuildCommandPermissions]:
+        route = routes.PUT_APPLICATION_GUILD_COMMANDS_PERMISSIONS.compile(application=application, guild=guild)
+        body = [
+            {
+                "id": str(snowflakes.Snowflake(command)),
+                "permissions": [self._entity_factory.serialize_command_permission(permission) for permission in perms],
+            }
+            for command, perms in permissions.items()
+        ]
+        response = await self._request(route, json=body)
+
+        assert isinstance(response, list)
+        return [self._entity_factory.deserialize_guild_command_permissions(payload) for payload in response]
+
+    async def set_application_command_permissions(
+        self,
+        application: snowflakes.SnowflakeishOr[guilds.PartialApplication],
+        guild: snowflakes.SnowflakeishOr[guilds.PartialGuild],
+        command: snowflakes.SnowflakeishOr[commands.Command],
+        permissions: typing.Sequence[commands.CommandPermission],
+    ) -> commands.GuildCommandPermissions:
+        route = routes.PUT_APPLICATION_COMMAND_PERMISSIONS.compile(
+            application=application, guild=guild, command=command
+        )
+        body = data_binding.JSONObjectBuilder()
+        body.put_array("permissions", permissions, conversion=self._entity_factory.serialize_command_permission)
+        response = await self._request(route, json=body)
+
+        assert isinstance(response, dict)
+        return self._entity_factory.deserialize_guild_command_permissions(response)
+
     def interaction_deferred_builder(
         self, type_: typing.Union[base_interactions.ResponseType, int], /
     ) -> special_endpoints.InteractionDeferredBuilder:
@@ -3066,6 +3383,8 @@ class RESTClientImpl(rest_api.RESTClient):
         *,
         flags: typing.Union[int, messages_.MessageFlag, undefined.UndefinedType] = undefined.UNDEFINED,
         tts: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
+        component: undefined.UndefinedOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedOr[typing.Sequence[special_endpoints.ComponentBuilder]] = undefined.UNDEFINED,
         embed: undefined.UndefinedOr[embeds_.Embed] = undefined.UNDEFINED,
         embeds: undefined.UndefinedOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
@@ -3076,14 +3395,24 @@ class RESTClientImpl(rest_api.RESTClient):
             typing.Union[snowflakes.SnowflakeishSequence[guilds.PartialRole], bool]
         ] = undefined.UNDEFINED,
     ) -> None:
+        if not undefined.any_undefined(component, components):
+            raise ValueError("You may only specify one of 'component' or 'components', not both")
+
         if not undefined.any_undefined(embed, embeds):
             raise ValueError("You may only specify one of 'embed' or 'embeds', not both")
 
-        if not isinstance(embeds, typing.Collection) and embeds is not undefined.UNDEFINED:
+        if components is not undefined.UNDEFINED and not isinstance(components, typing.Collection):
             raise TypeError(
-                "You passed a non collection to 'embeds', but this expects a collection. Maybe you meant to "
+                "You passed a non-collection to 'components', but this expects a collection. Maybe you meant to "
+                "use 'component' (singular) instead?"
+            )
+
+        if embeds not in _NONE_OR_UNDEFINED and not isinstance(embeds, typing.Collection):
+            raise TypeError(
+                "You passed a non-collection to 'embeds', but this expects a collection. Maybe you meant to "
                 "use 'embed' (singular) instead?"
             )
+
         if undefined.all_undefined(embed, embeds) and isinstance(content, embeds_.Embed):
             # Syntactic sugar, common mistake to accidentally send an embed
             # as the content, so lets detect this and fix it for the user.
@@ -3096,13 +3425,19 @@ class RESTClientImpl(rest_api.RESTClient):
         body.put("type", response_type)
 
         data = data_binding.JSONObjectBuilder()
-        data.put("content", content)
+        data.put("content", content, conversion=str)
         data.put("flags", flags)
         data.put("tts", tts)
         data.put(
             "allowed_mentions",
             mentions.generate_allowed_mentions(mentions_everyone, undefined.UNDEFINED, user_mentions, role_mentions),
         )
+
+        if component is not undefined.UNDEFINED:
+            data.put("components", [component.build()])
+
+        elif components is not undefined.UNDEFINED:
+            data.put("components", [component.build() for component in components])
 
         if embed is not undefined.UNDEFINED:
             embed_payload, attachments = self._entity_factory.serialize_embed(embed)
@@ -3115,7 +3450,7 @@ class RESTClientImpl(rest_api.RESTClient):
             embed_payloads: data_binding.JSONArray = []
             for embed in embeds:
                 serialized_embed, attachments = self._entity_factory.serialize_embed(embed)
-                embed_payloads.append(embed)
+                embed_payloads.append(serialized_embed)
                 if attachments:
                     raise ValueError("Cannot send an embed with attachments in a slash command's initial response")
 
@@ -3130,10 +3465,14 @@ class RESTClientImpl(rest_api.RESTClient):
         token: str,
         content: undefined.UndefinedNoneOr[typing.Any] = undefined.UNDEFINED,
         *,
-        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
-        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         attachment: undefined.UndefinedOr[files.Resourceish] = undefined.UNDEFINED,
         attachments: undefined.UndefinedOr[typing.Sequence[files.Resourceish]] = undefined.UNDEFINED,
+        component: undefined.UndefinedNoneOr[special_endpoints.ComponentBuilder] = undefined.UNDEFINED,
+        components: undefined.UndefinedNoneOr[
+            typing.Sequence[special_endpoints.ComponentBuilder]
+        ] = undefined.UNDEFINED,
+        embed: undefined.UndefinedNoneOr[embeds_.Embed] = undefined.UNDEFINED,
+        embeds: undefined.UndefinedNoneOr[typing.Sequence[embeds_.Embed]] = undefined.UNDEFINED,
         replace_attachments: bool = False,
         mentions_everyone: undefined.UndefinedOr[bool] = undefined.UNDEFINED,
         user_mentions: undefined.UndefinedOr[
@@ -3149,10 +3488,12 @@ class RESTClientImpl(rest_api.RESTClient):
             data_binding.JSONObjectBuilder(),
             no_auth=True,
             content=content,
-            embed=embed,
-            embeds=embeds,
             attachment=attachment,
             attachments=attachments,
+            component=component,
+            components=components,
+            embed=embed,
+            embeds=embeds,
             replace_attachments=replace_attachments,
             mentions_everyone=mentions_everyone,
             user_mentions=user_mentions,
@@ -3165,3 +3506,6 @@ class RESTClientImpl(rest_api.RESTClient):
     ) -> None:
         route = routes.DELETE_INTERACTION_RESPONSE.compile(webhook=application, token=token)
         await self._request(route, no_auth=True)
+
+    def build_action_row(self) -> special_endpoints.ActionRowBuilder:
+        return special_endpoints_impl.ActionRowBuilder()

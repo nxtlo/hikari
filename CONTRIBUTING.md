@@ -10,20 +10,59 @@ of conduct can lead to a ban from the project and a report to GitHub.
 
 You can read the code of conduct [here](https://github.com/hikari-py/hikari/blob/master/CODE_OF_CONDUCT.md).
 
+# Versioning scheme
+
+This project follows the versioning scheme stated by [PEP 440](https://www.python.org/dev/peps/pep-0440/).
+
+The development version number is increased automatically after each release in the `master` branch in the master
+repository.
+
+Please also refer to the [Semantic Versioning specification](https://semver.org/) for more information.
+
+# Deprecation process
+
+The removal or renaming of anything facing the public facing API must go through a deprecation process, which should
+match that of the versioning scheme. There are utilities under `hikari.internal.deprecation` to aid with it.
+
+# Towncrier
+
+To aid with the generation of `CHANGELOG.md` as well as the releases changelog we use `towncrier`.
+
+You will need to install `towncrier` and `hikari` from source before making changelog additions.
+```bash
+pip install towncrier
+pip install -e .
+```
+
+For every pull request made to this project, there should be a short explanation of the change under `changes/`
+with the following format: `{pull_request_number}.{type}.md`,
+
+Possible types are:
+
+- `feature`: Signifying a new feature.
+- `bugfix`: Signifying a bugfix.
+- `doc`: Signifying a documentation improvement.
+- `removal`: Signifying a deprecation or removal of public API.
+
+For changes that do not fall under any of the above cases, please specify the lack of the changelog in the pull request
+description so that a maintainer can skip the job that checks for newly added fragments.
+
+Best way to create the fragments is to run `towncrier create {pull_request_number}.{type}.md` after creating the
+pull request, edit the created file and committing the changes.
+
+Multiple fragment types can be created per pull request if it covers multiple areas.
+
 # Branches
 
-We would like to keep consistency in naming branches.
-
-**This should be followed to ensure no issues when specific jobs run.**
-**Your merge request could be closed if a developer/maintainer thinks it is risky due to pipelines failing.**
+We would like to keep consistency in naming branches in the remote.
 
 To push branches directly to the remote, you will have to name them like this:
-  - `task/issue-number-small-info-on-branch`
-    - This should be the default for any commit that doesn't fall in any of the cases under.
   - `feature/issue-number-small-info-on-branch`
     - This should be used for branches that require more tasks to merge into before going as one MR into `master`.
   - `bugfix/issue-number-small-info-on-branch`
     - This should be used for bugfixes.
+  - `task/issue-number-small-info-on-branch`
+    - This should be the default for any commit that doesn't fall in any of the cases above.
 
 `issue-number` is optional (only use if issue exists) and can be left out. `small-info-on-branch` should be replaced
 with a small description of the branch.
@@ -31,6 +70,11 @@ with a small description of the branch.
 # Nox
 
 We have nox to help out with running pipelines locally and provides some helpful functionality.
+
+You will need to install `nox` locally before running any pipelines.
+```bash
+pip install nox
+```
 
 Nox is similar to tox, but uses a pure Python configuration instead of an INI based configuration. Nox and tox are
 both tools for generating virtual environments and running commands in those environments. Examples of usage include
@@ -57,6 +101,3 @@ This includes:
     - Generate webpage + documentation.
 
 All jobs will need to succeed before anything gets merged.
-
-Note that this rule may be skipped for `twemoji` if the problem is caused by a change Discord have made to their
-mapping.
